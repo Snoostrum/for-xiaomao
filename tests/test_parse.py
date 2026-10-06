@@ -3,9 +3,19 @@ import json
 import pymupdf
 import pytest
 
+from app.config import Config
 from app.courseware import CoursewareError, cache_dir, course_file, page_md
-from app.courseware.parse import PARSE_VERSION, course_status, parse_text_layer, read_meta
+from app.courseware.parse import (
+    PARSE_VERSION,
+    course_status,
+    parse_course,
+    parse_text_layer,
+    read_meta,
+    vision_cfg,
+)
 from app.courseware.store import save_upload
+from app.usage import usage_totals
+from tests.test_provider import FakeLLM, cfg_for
 
 # 已在这台机器上验过:pymupdf 1.28 里 fontname="china-s" 能写中文并能原样抽回来
 EMPTY_PDF_ZERO_PAGES = (
@@ -234,3 +244,100 @@ def test_course_status_done_reads_meta(tmp_path):
         "scanned_pages": 1,
         "parsed_at": "2026-10-07T10:00:00",
     }
+
+
+# —— Task 8:第二层——扫描页渲染成图,交给视觉模型 ——
+
+# 与 T7 同一个坑:夹具里「文字页内容在这里」这类短串会被 SCANNED_TEXT_THRESHOLD=20
+# 判成扫描页(与用例意图正好相反)。阈值属计划「关键常量(照抄,勿自行改值)」,不能动;
+# 于是只把「文字页」的示例文字补到 20 字符以上,页面角色与断言一字未改。
+
+
+def vision_body(text="扫描页识别结果:$x^2+y^2=1$"):
+    return {
+        "choices": [{"message": {"content": text}}],
+        "usage": {"prompt_tokens": 800, "completion_tokens": 60},
+    }
+
+
+def test_scanned_page_goes_to_vision_and_lands_in_md(tmp_path):
+    data = tmp_path / "data"
+    with FakeLLM(body=vision_body()) as fake:
+        cid = add_course(data, tmp_path, ["文字页内容在这里,这一页的文字层是好的,不是扫描件。", ""])
+        meta = parse_course(data, cid, cfg_for(fake))
+    assert meta["scanned_pages"] == [2]
+    assert "x^2" in page_md(cache_dir(data, cid), 2).read_text(encoding="utf-8")
+    parts = fake.requests[0]["json"]["messages"][0]["content"]
+    assert parts[0]["type"] == "text"
+    assert parts[1]["type"] == "image_url"
+    assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert usage_totals(data)["calls"] == 1  # 看这一页记了一笔账
+
+
+def test_second_parse_costs_nothing_more(tmp_path):
+    # Review Focus #1/#3 的核心:全部解析好之后再点「解析」——一个模型请求都不许发
+    data = tmp_path / "data"
+    with FakeLLM(body=vision_body()) as fake:
+        cid = add_course(data, tmp_path, ["文字页的文字内容在这里,足够长,不会被当扫描页。", ""])
+        parse_course(data, cid, cfg_for(fake))
+        sent_after_first = len(fake.requests)
+        meta = parse_course(data, cid, cfg_for(fake))  # 第二遍
+    assert len(fake.requests) == sent_after_first
+    assert meta["scanned_pages"] == [2]  # 重跑也算得出"哪些页是扫描件"
+    assert usage_totals(data)["calls"] == 1
+
+
+def test_text_only_course_needs_no_model_at_all(tmp_path):
+    # 全是文字页的课件:连 Key 都没配也能解析完(解析是本地活)
+    data = tmp_path / "data"
+    cid = add_course(
+        data,
+        tmp_path,
+        [
+            "第一页的文字内容在这里,足够长,不会被当扫描页。",
+            "第二页的文字内容在这里,足够长,不会被当扫描页。",
+        ],
+    )
+    meta = parse_course(data, cid, Config())
+    assert meta["pages"] == 2 and read_meta(data, cid) is not None
+
+
+def test_scanned_pages_without_key_is_human(tmp_path):
+    data = tmp_path / "data"
+    cid = add_course(data, tmp_path, ["文字页的文字内容在这里,足够长,不会被当扫描页。", ""])
+    with pytest.raises(CoursewareError) as ei:
+        parse_course(data, cid, Config())
+    assert "设置" in str(ei.value)
+
+
+def test_vision_cfg_override():
+    cfg = Config(provider="custom", base_url="http://x/v1", api_key="k", model="主模型", vision_model="看图模型")
+    assert vision_cfg(cfg).model == "看图模型"
+    assert vision_cfg(Config(model="主模型")).model == "主模型"  # 留空 = 跟主模型
+    assert cfg.model == "主模型"  # 原配置不被改坏
+
+
+def test_vision_failure_keeps_pages_and_resumes(tmp_path):
+    # Review Focus #3:模型挂了 → 人话 + 已解析页保留;修好后接着跑,只补缺的页
+    data = tmp_path / "data"
+    cid = add_course(data, tmp_path, ["文字页的文字内容在这里,足够长,不会被当扫描页。", ""])
+    with FakeLLM(status=500) as fake:
+        with pytest.raises(CoursewareError) as ei:
+            parse_course(data, cid, cfg_for(fake))
+    assert "接着来" in str(ei.value)
+    assert page_md(cache_dir(data, cid), 1).exists()  # 文字页留着
+    assert read_meta(data, cid) is None               # 没跑完 = 没有完成标记
+    with FakeLLM(body=vision_body("补上的")) as fake2:
+        meta = parse_course(data, cid, cfg_for(fake2))
+        assert len(fake2.requests) == 1  # 只补了第 2 页,第 1 页没重跑
+    assert meta["pages"] == 2
+
+
+def test_empty_vision_answer_writes_note_not_blank(tmp_path):
+    # Review Focus #5 的解析侧:模型对一页什么都没说 → 页文件里是人话说明,不是空文件
+    data = tmp_path / "data"
+    with FakeLLM(body=vision_body("")) as fake:
+        cid = add_course(data, tmp_path, [""])
+        parse_course(data, cid, cfg_for(fake))
+    text = page_md(cache_dir(data, cid), 1).read_text(encoding="utf-8")
+    assert text.strip() != "" and "没说出内容" in text

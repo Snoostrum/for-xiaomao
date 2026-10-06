@@ -8,14 +8,20 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 import pymupdf
 
+from app.config import Config
 from app.courseware import CoursewareError, cache_dir, course_file, page_md
+from app.llm.provider import LLMError, chat_completion_full
+from app.usage import record_usage
 
 log = logging.getLogger(__name__)
 
@@ -113,3 +119,97 @@ def course_status(data_dir: Path, course_id: str) -> dict:
     pages = cache_dir(data_dir, course_id) / "pages"
     parsed = len(list(pages.glob("*.md"))) if pages.exists() else 0
     return {"state": "partial" if parsed else "none", "parsed_pages": parsed}
+
+
+RENDER_DPI = 150        # 扫描页渲染的清晰度:够看清字和公式,又不至于图片太大
+VISION_MAX_TOKENS = 4096
+VISION_TIMEOUT = 120.0
+
+VISION_PROMPT = (
+    "这是一份课件 PDF 的第 {page} 页(共 {total} 页),它没有文字层(扫描或图片形式)。"
+    "请把这一页的内容完整转成 Markdown:文字照抄;公式用 $...$;表格尽量还原;"
+    "看不清的地方标 [看不清]。不要解释、不要客套,只输出这一页的内容。"
+)
+
+
+def vision_cfg(cfg: Config) -> Config:
+    """看扫描页用哪套配置:填了『视觉模型』就用它,留空 = 和主模型相同。"""
+    if not cfg.vision_model:
+        return cfg
+    return replace(cfg, model=cfg.vision_model)
+
+
+def render_page_png(doc: pymupdf.Document, page_index: int) -> bytes:
+    return doc[page_index].get_pixmap(dpi=RENDER_DPI).tobytes("png")
+
+
+def _look_at_page(data_dir: Path, cfg: Config, png: bytes, page_no: int, total: int) -> str:
+    """让模型看一页扫描件。失败重试一次——视觉请求偶尔抽风,再来一遍再下结论。"""
+    b64 = base64.b64encode(png).decode("ascii")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": VISION_PROMPT.format(page=page_no, total=total)},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            ],
+        }
+    ]
+    last: LLMError | None = None
+    for _ in range(2):
+        try:
+            text, usage = chat_completion_full(
+                cfg, messages, max_tokens=VISION_MAX_TOKENS, timeout=VISION_TIMEOUT
+            )
+            record_usage(data_dir, "看扫描页", cfg.model, usage)
+            return text.strip()
+        except LLMError as e:
+            last = e
+    raise last
+
+
+def parse_course(data_dir: Path, course_id: str, cfg: Config, progress: Progress | None = None) -> dict:
+    """完整解析一遍:文本层 + 扫描页视觉层;meta.json 最后写 = 这遍跑完了。
+
+    中途失败:页文件都留着;修好问题再点「解析」,只补没看过的页——不重复花钱。
+    """
+    summary = parse_text_layer(data_dir, course_id, progress)
+    pending = summary["pending_scanned"]
+    total = summary["total"]
+    if pending:
+        vcfg = vision_cfg(cfg)
+        if not (vcfg.api_key and vcfg.base_url and vcfg.model):
+            raise CoursewareError(
+                f"有 {len(pending)} 页是扫描/图片页,需要模型来看——"
+                "先去「设置」把 Key、接口地址、模型名填好,再点「解析」。"
+            )
+        doc = _open_doc(data_dir, course_id)
+        try:
+            cache = cache_dir(data_dir, course_id)
+            for n in pending:
+                try:
+                    text = _look_at_page(data_dir, vcfg, render_page_png(doc, n - 1), n, total)
+                except LLMError as e:
+                    raise CoursewareError(
+                        f"第 {n} 页(扫描页)没看成:{e.human}——已经解析好的页都留着,弄好后点「解析」接着来。",
+                        e.detail,
+                    )
+                if not text:
+                    text = "(这一页模型没说出内容;可以之后再点一次「解析」重看)"  # 空回答不留白页
+                page_md(cache, n).write_text(text, encoding="utf-8")
+                if progress:
+                    progress(n, total)
+        finally:
+            doc.close()
+    meta = {
+        "version": PARSE_VERSION,
+        "pages": total,
+        "scanned_pages": summary["scanned_pages"],
+        "parsed_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    cache = cache_dir(data_dir, course_id)
+    cache.mkdir(parents=True, exist_ok=True)
+    tmp = meta_file(data_dir, course_id).with_name("meta.json.tmp")
+    tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(meta_file(data_dir, course_id))  # 最后一步:完成标记落定
+    return meta
