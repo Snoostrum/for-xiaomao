@@ -32,25 +32,42 @@ document.querySelectorAll(".tab").forEach((btn) => {
 const sel = document.getElementById("provider");
 const inputBase = document.getElementById("base-url");
 const inputModel = document.getElementById("model");
+const inputVision = document.getElementById("vision-model");
 const inputKey = document.getElementById("api-key");
 
 // 取预设和已存配置;失败也要继续——保证下面的按钮监听挂得上,并把人话提示显示出来
 let presets = [];
+const loadErrors = [];
 try {
   presets = await api("/api/presets");
   for (const p of presets) {
     sel.append(new Option(p.name, p.key));
   }
+} catch (e) {
+  loadErrors.push(e.message);
+}
 
+try {
   const cfg = await api("/api/config");
+  if (cfg.provider && !presets.some((p) => p.key === cfg.provider)) {
+    sel.append(new Option(cfg.provider + "(列表里没有,保留原样)", cfg.provider));
+  }
   sel.value = cfg.provider || "openrouter";
   inputBase.value = cfg.base_url || "";
   inputModel.value = cfg.model || "";
+  inputVision.value = cfg.vision_model || "";
   if (cfg.api_key_masked) {
     inputKey.placeholder = "已保存:" + cfg.api_key_masked + "(留空 = 不改)";
   }
 } catch (e) {
-  show("save-result", e.message, false);
+  loadErrors.push(e.message);
+}
+
+if (loadErrors.length) {
+  // 口子⑥:表单没加载全时别让保存/测试可点——否则一按就把已存配置写成空白
+  document.getElementById("btn-save").disabled = true;
+  document.getElementById("btn-test").disabled = true;
+  show("save-result", loadErrors.join("\n") + "\n(刷新页面再试;先别保存,免得把已有配置覆盖成空白。)", false);
 }
 
 // 首屏补默认值:平台已选中但地址/模型空白时,用该预设补上(只填空字段,不覆盖已有值)
@@ -74,6 +91,7 @@ async function saveForm() {
     provider: sel.value,
     base_url: inputBase.value,
     model: inputModel.value,
+    vision_model: inputVision.value,
     api_key: inputKey.value,
   };
   try {

@@ -7,7 +7,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_STRIP_FIELDS = ("provider", "base_url", "api_key", "model", "download_dir")
+_STRIP_FIELDS = ("provider", "base_url", "api_key", "model", "vision_model", "download_dir")
 
 
 @dataclass
@@ -16,6 +16,7 @@ class Config:
     base_url: str = ""
     api_key: str = ""
     model: str = ""
+    vision_model: str = ""  # 看扫描页用的模型;留空 = 和主模型相同
     download_dir: str = ""
 
 

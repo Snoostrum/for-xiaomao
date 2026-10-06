@@ -16,7 +16,12 @@ def test_index_shows_three_tabs(tmp_path):
 def test_presets_endpoint_lists_platforms(tmp_path):
     data = make_client(tmp_path).get("/api/presets").get_json()
     keys = [p["key"] for p in data]
-    assert "openrouter" in keys and "kimi" in keys and "custom" in keys
+    assert "openrouter" in keys and "kimi" in keys and "deepseek" in keys and "custom" in keys
+
+
+def test_settings_has_vision_model_field(tmp_path):
+    html = make_client(tmp_path).get("/").get_data(as_text=True)
+    assert 'id="vision-model"' in html
 
 
 def test_js_and_css_are_served(tmp_path):

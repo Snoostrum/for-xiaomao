@@ -104,3 +104,18 @@ def test_same_origin_post_is_allowed(tmp_path):
         headers={"Origin": "http://127.0.0.1:8756"},
     )
     assert r.status_code == 200
+
+
+def test_post_config_blank_provider_keeps_stored(tmp_path):
+    # 口子⑤:前端没加载全时会把 provider 发成空——不能把人已存的平台抹掉
+    save_config(tmp_path, Config(provider="kimi", api_key="sk-old", base_url="https://x/v1", model="m"))
+    r = make_client(tmp_path).post("/api/config", json={"provider": "", "api_key": "", "base_url": "https://x/v1", "model": "m"})
+    assert r.status_code == 200
+    assert load_config(tmp_path).provider == "kimi"
+
+
+def test_vision_model_roundtrip(tmp_path):
+    c = make_client(tmp_path)
+    c.post("/api/config", json={"provider": "custom", "base_url": "https://x/v1", "model": "m", "vision_model": " vm "})
+    assert load_config(tmp_path).vision_model == "vm"
+    assert c.get("/api/config").get_json()["vision_model"] == "vm"

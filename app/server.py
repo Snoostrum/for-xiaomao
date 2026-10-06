@@ -83,6 +83,7 @@ def create_app(data_dir: Path) -> Flask:
             "provider": cfg.provider,
             "base_url": cfg.base_url,
             "model": cfg.model,
+            "vision_model": cfg.vision_model,
             "api_key_masked": mask_key(cfg.api_key),
             "download_dir": cfg.download_dir,
         })
@@ -93,9 +94,13 @@ def create_app(data_dir: Path) -> Flask:
         if not isinstance(body, dict):
             return jsonify({"ok": False, "message": "请求格式不对(需要 JSON 对象)——请在页面上操作。"}), 400
         cfg = load_config(data_dir)
-        cfg.provider = str(body.get("provider", cfg.provider)).strip()
+        new_provider = str(body.get("provider", "")).strip()
+        if new_provider:  # 空 = 不改动已保存的平台(前端没加载全时,别把人配置抹掉)
+            cfg.provider = new_provider
         cfg.base_url = str(body.get("base_url", cfg.base_url)).strip()
         cfg.model = str(body.get("model", cfg.model)).strip()
+        if "vision_model" in body:
+            cfg.vision_model = str(body.get("vision_model") or "").strip()
         cfg.download_dir = str(body.get("download_dir", cfg.download_dir)).strip()
         new_key = str(body.get("api_key", "")).strip()
         if new_key:  # 空 = 不改动已保存的 Key

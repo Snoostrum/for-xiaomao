@@ -30,5 +30,11 @@ PRESETS: dict[str, Preset] = {
         base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",  # 需核实
         default_model="qwen3.8-flash",  # 需核实
     ),
+    "deepseek": Preset(
+        key="deepseek",
+        name="DeepSeek",
+        base_url="https://api.deepseek.com/v1",
+        default_model="deepseek-flash",  # deepseek-chat 仍是别名;以平台当天文档为准
+    ),
     "custom": Preset(key="custom", name="自定义", base_url="", default_model=""),
 }

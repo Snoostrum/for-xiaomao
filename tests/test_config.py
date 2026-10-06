@@ -2,7 +2,8 @@ from app.config import Config, config_path, load_config, mask_key, save_config
 
 
 def test_roundtrip(tmp_path):
-    cfg = Config(provider="openrouter", base_url="https://x/v1", api_key="sk-abc", model="m", download_dir="")
+    cfg = Config(provider="openrouter", base_url="https://x/v1", api_key="sk-abc", model="m",
+                 vision_model="vm", download_dir="")
     save_config(tmp_path, cfg)
     assert load_config(tmp_path) == cfg
 
