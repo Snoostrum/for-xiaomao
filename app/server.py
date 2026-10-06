@@ -20,6 +20,8 @@ from app.usage import usage_totals
 
 log = logging.getLogger(__name__)
 
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 单次上传上限;超出 Flask 会抛 413,下面接人话
+
 
 def find_free_port(preferred: int) -> int:
     """先试首选端口,再顺延 20 个;都不行就让系统挑。preferred=0 表示直接让系统挑。"""
@@ -40,6 +42,7 @@ def create_app(data_dir: Path) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.config["DATA_DIR"] = data_dir
     web_dir = Path(__file__).resolve().parent / "web"
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
     def _local_origin_ok(origin: str) -> bool:
         """Origin 头只认本机。浏览器发跨站请求一定会带 Origin;curl/测试不带,放行。"""
