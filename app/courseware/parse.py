@@ -121,17 +121,23 @@ def parse_text_layer(data_dir: Path, course_id: str, progress: Progress | None =
 
 
 def course_status(data_dir: Path, course_id: str) -> dict:
-    """给课件列表用:这份解析到哪了。"""
+    """给课件列表用:这份解析到哪了。字段被手改坏也照常答,不能让列表接口整条垮掉。"""
     meta = read_meta(data_dir, course_id)
     if meta is not None:
-        return {
-            "state": "done",
-            "pages": int(meta.get("pages") or 0),
-            "scanned_pages": len(meta.get("scanned_pages") or []),
-            "parsed_at": str(meta.get("parsed_at") or ""),
-        }
-    pages = cache_dir(data_dir, course_id) / "pages"
-    parsed = len(list(pages.glob("*.md"))) if pages.exists() else 0
+        try:
+            pages = int(meta.get("pages") or 0)
+        except (ValueError, TypeError):  # 页数不是数字:当这份没解析完,下面按 pages/ 里数
+            pages = None
+        if pages is not None:
+            scanned = meta.get("scanned_pages")
+            return {
+                "state": "done",
+                "pages": pages,
+                "scanned_pages": len(scanned) if isinstance(scanned, list) else 0,  # 脏了就忽略
+                "parsed_at": str(meta.get("parsed_at") or ""),
+            }
+    pages_dir = cache_dir(data_dir, course_id) / "pages"
+    parsed = len(list(pages_dir.glob("*.md"))) if pages_dir.exists() else 0
     return {"state": "partial" if parsed else "none", "parsed_pages": parsed}
 
 

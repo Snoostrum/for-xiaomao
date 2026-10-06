@@ -113,6 +113,20 @@ def test_list_skips_junk_in_the_library(tmp_path):
     assert [c["id"] for c in list_courses(tmp_path)] == [cid]
 
 
+def test_reupload_repairs_meta_with_dirty_size(tmp_path):
+    # N2:F1 的窄残留——说明文件 JSON 读得出、但 size 是脏的(列表因此跳过它),
+    # 去重命中时也要算「读不出」补写,不然还是隐身且重传不自愈
+    cid, _ = upload(tmp_path, PDF_A, "讲义.pdf")
+    course_meta_file(tmp_path, cid).write_text(
+        json.dumps({"name": "讲义.pdf", "size": {"不是": "数字"}}, ensure_ascii=False), encoding="utf-8"
+    )
+    assert list_courses(tmp_path) == []  # size 脏:列表跳过它
+    cid2, is_new = upload(tmp_path, PDF_A, "讲义.pdf")
+    assert (cid2, is_new) == (cid, False)
+    listed = list_courses(tmp_path)
+    assert [c["id"] for c in listed] == [cid] and listed[0]["size"] == len(PDF_A)  # 补写,连大小也修对
+
+
 def test_list_skips_course_with_dirty_size(tmp_path):
     # M1:size 被手改成不是数字的东西 → 跳过这一条(以前 int() 抛 TypeError 让列表 500),别的照列
     bad, _ = upload(tmp_path, PDF_A, "坏的.pdf")

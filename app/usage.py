@@ -36,7 +36,9 @@ def usage_totals(data_dir: Path) -> dict:
     calls = prompt = completion = 0
     p = _usage_path(data_dir)
     if p.exists():
-        for line in p.read_text(encoding="utf-8").splitlines():
+        # errors="replace":账本里混进非 UTF-8 字节(手改、磁盘花)时把坏字节替掉继续读——
+        # 替完还不是 JSON 的行下面照跳,不能让一个坏字节把整本账(和 /api/usage)带崩
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 e = json.loads(line)
             except ValueError:

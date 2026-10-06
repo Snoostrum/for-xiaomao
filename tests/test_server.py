@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import socket
 import threading
@@ -8,6 +9,7 @@ import pymupdf
 import pytest
 
 from app.config import Config, load_config, save_config
+from app.courseware.parse import PARSE_VERSION, meta_file
 from app.logging_setup import setup_logging
 from app.server import create_app, find_free_port
 from tests.test_provider import FakeLLM, cfg_for
@@ -419,13 +421,45 @@ def test_courses_endpoint_survives_junk_in_the_library(tmp_path):
 
 
 def test_usage_endpoint_survives_dirty_lines(tmp_path):
-    # M2:账本里混进脏行(合法 JSON 非对象、token 不是数字)→ /api/usage 照样 200
-    with (tmp_path / "usage.jsonl").open("a", encoding="utf-8") as f:
-        f.write("123\n")
-        f.write('{"prompt_tokens": "很多"}\n')
+    # M2/N3:账本里混进脏行(合法 JSON 非对象、token 不是数字、非 UTF-8 字节)→ /api/usage 照样 200
+    with (tmp_path / "usage.jsonl").open("ab") as f:
+        f.write(b"123\n")
+        f.write('{"prompt_tokens": "很多"}\n'.encode("utf-8"))
+        f.write(b"\xff\xfe\x00\n")  # 坏字节:替完不是 JSON,跳过
     r = make_client(tmp_path).get("/api/usage")
     assert r.status_code == 200
     assert r.get_json()["calls"] == 1  # 是一次调用,只是 token 数字脏了
+
+
+def test_courses_endpoint_survives_meta_with_bad_pages(tmp_path):
+    # N1:pages 被手改成文字(meta 本身能过 read_meta)→ 以前 course_status 的 int() 直接 500,
+    # 整张列表(连带删除入口)一起废;现在按「没解析完」答,接口照常 200
+    c = make_client(tmp_path)
+    course_id = upload(c).get_json()["id"]
+    mf = meta_file(tmp_path, course_id)
+    mf.parent.mkdir(parents=True, exist_ok=True)
+    mf.write_text(
+        json.dumps({"version": PARSE_VERSION, "pages": "一", "scanned_pages": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    r = c.get("/api/courses")
+    assert r.status_code == 200
+    item = r.get_json()[0]
+    assert item["id"] == course_id and item["status"]["state"] == "none"
+
+
+def test_courses_endpoint_survives_meta_with_bad_scanned_pages(tmp_path):
+    # N1 的另一半:scanned_pages 不是数组(手改成了数字)→ 当没有扫描页,state 仍 done
+    c = make_client(tmp_path)
+    course_id = upload(c).get_json()["id"]
+    mf = meta_file(tmp_path, course_id)
+    mf.parent.mkdir(parents=True, exist_ok=True)
+    mf.write_text(
+        json.dumps({"version": PARSE_VERSION, "pages": 4, "scanned_pages": 5}), encoding="utf-8"
+    )
+    r = c.get("/api/courses")
+    assert r.status_code == 200
+    assert r.get_json()[0]["status"] == {"state": "done", "pages": 4, "scanned_pages": 0, "parsed_at": ""}
 
 
 def test_ask_survives_the_course_being_deleted_mid_question(tmp_path, monkeypatch):

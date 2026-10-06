@@ -28,3 +28,13 @@ def test_dirty_lines_do_not_break_the_total(tmp_path):
         f.write("123\n")
         f.write('{"prompt_tokens": "很多", "completion_tokens": 2}\n')
     assert usage_totals(tmp_path) == {"calls": 2, "prompt_tokens": 1, "completion_tokens": 1}
+
+
+def test_non_utf8_bytes_do_not_break_the_total(tmp_path):
+    # N3:账本里混进非 UTF-8 字节(手改/磁盘花)→ read_text 以前直接 UnicodeDecodeError,
+    # 让 /api/usage 500;现在读的时候把坏字节替掉:好行照算,替完还不是 JSON 的行照跳
+    record_usage(tmp_path, "提问", "m", {"prompt_tokens": 1, "completion_tokens": 1})
+    with (tmp_path / "usage.jsonl").open("ab") as f:
+        f.write(b"\xff\xfe\x00\n")  # 坏字节替完不是 JSON:跳过,一次都不算
+        f.write(b'{"prompt_tokens": 7, "completion_tokens": 3}\n')  # 好行照算
+    assert usage_totals(tmp_path) == {"calls": 2, "prompt_tokens": 8, "completion_tokens": 4}

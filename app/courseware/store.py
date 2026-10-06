@@ -28,12 +28,19 @@ _CHUNK = 1024 * 1024  # 1MB 一块:几百 MB 的课件也不整份塞进内存
 
 
 def _read_meta(data_dir: Path, course_id: str) -> dict | None:
-    """读课件说明文件;没有、读不动、不是对象都算「读不出」——口径和列表接口一致。"""
+    """读课件说明文件,顺带把 size 归一化成整数;没有、读不动、不是对象、size 脏都算「读不出」。
+
+    这是「这份课件的说明文件好不好」的唯一判据:列表用它决定列不列、去重分支用它决定
+    补不补写。两边口径要是不一样,就会漏出「原件在、重传不补、列表又看不见」的隐身课件。
+    """
     try:
         meta = json.loads(course_meta_file(data_dir, course_id).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if not isinstance(meta, dict):
+            return None
+        meta["size"] = int(meta.get("size") or 0)  # 归一化:后面用的人不必再兜脏数据
+    except (OSError, ValueError, TypeError):
         return None
-    return meta if isinstance(meta, dict) else None
+    return meta
 
 
 def _write_meta(data_dir: Path, course_id: str, filename: str, size: int) -> None:
@@ -108,17 +115,12 @@ def list_courses(data_dir: Path) -> list[dict]:
         if meta is None:
             log.warning("课件说明文件坏了,跳过:%s", mfile.name)
             continue
-        try:
-            size = int(meta.get("size") or 0)
-        except (ValueError, TypeError):  # size 被手改成了不是数字的东西:一样跳过
-            log.warning("课件说明文件坏了,跳过:%s", mfile.name)
-            continue
         out.append(
             {
                 "id": course_id,
                 "name": str(meta.get("name") or f"{course_id}.pdf"),
                 "added_at": str(meta.get("added_at") or ""),
-                "size": size,
+                "size": meta["size"],  # _read_meta 已归一化成 int
             }
         )
     out.sort(key=lambda c: c["added_at"], reverse=True)
