@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>小灶</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>小灶</h1>
+  <nav>
+    <button class="tab active" data-tab="course">课件助手</button>
+    <button class="tab" data-tab="download">下载管家</button>
+    <button class="tab" data-tab="settings">设置</button>
+  </nav>
+</header>
+<main>
+  <section class="panel active" id="panel-course">
+    <p>课件助手还没接上——在下一个里程碑。</p>
+  </section>
+  <section class="panel" id="panel-download">
+    <p>下载管家还没接上——再下一个里程碑。</p>
+  </section>
+  <section class="panel" id="panel-settings">
+    <label>平台
+      <select id="provider"></select>
+    </label>
+    <label>接口地址
+      <input id="base-url" placeholder="https://.../v1">
+    </label>
+    <label>模型名
+      <input id="model" placeholder="例如 kimi-k3">
+    </label>
+    <label>API Key
+      <input id="api-key" type="password" placeholder="粘贴到这里(已存过就留空,表示不改)">
+    </label>
+    <div class="actions">
+      <button id="btn-save">保存</button>
+      <button id="btn-test">测试连接</button>
+    </div>
+    <p id="save-result"></p>
+    <p id="test-result"></p>
+  </section>
+</main>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

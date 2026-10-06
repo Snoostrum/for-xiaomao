@@ -1,0 +1,32 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #222; background: #faf9f6;
+}
+header {
+  display: flex; align-items: center; gap: 24px;
+  padding: 16px 24px; border-bottom: 1px solid #e5e2da; background: #fff;
+}
+h1 { font-size: 20px; margin: 0; }
+nav { display: flex; gap: 8px; }
+.tab {
+  font-size: 15px; padding: 8px 16px; border-radius: 8px;
+  border: 1px solid #d8d4c8; background: #fff; cursor: pointer;
+}
+.tab.active { background: #2f6f4f; color: #fff; border-color: #2f6f4f; }
+main { max-width: 720px; margin: 0 auto; padding: 24px; }
+.panel { display: none; }
+.panel.active { display: block; }
+label { display: block; margin: 14px 0 6px; font-size: 14px; color: #555; }
+input, select {
+  display: block; width: 100%; margin-top: 6px;
+  padding: 10px 12px; font-size: 15px;
+  border: 1px solid #d8d4c8; border-radius: 8px; background: #fff;
+}
+.actions { margin-top: 18px; display: flex; gap: 12px; }
+button { font-size: 15px; padding: 10px 20px; border-radius: 8px; cursor: pointer; }
+#btn-save { background: #2f6f4f; color: #fff; border: none; }
+#btn-test { background: #fff; border: 1px solid #d8d4c8; }
+.ok { color: #2f6f4f; }
+.err { color: #b23b2e; white-space: pre-wrap; }
