@@ -30,3 +30,17 @@ button { font-size: 15px; padding: 10px 20px; border-radius: 8px; cursor: pointe
 #btn-test { background: #fff; border: 1px solid #d8d4c8; }
 .ok { color: #2f6f4f; }
 .err { color: #b23b2e; white-space: pre-wrap; }
+
+.row { display: flex; gap: 10px; align-items: center; margin: 12px 0; }
+.row input { margin-top: 0; }
+.row input[type="file"] { flex: 1; padding: 6px; }
+.course-list { list-style: none; margin: 12px 0; padding: 0; }
+.course-list li {
+  display: flex; gap: 10px; align-items: center;
+  padding: 10px 12px; margin-bottom: 8px;
+  border: 1px solid #e5e2da; border-radius: 8px; background: #fff;
+}
+.course-name { flex: 1; word-break: break-all; }
+.course-meta { color: #777; font-size: 13px; }
+.course-actions { display: flex; gap: 6px; }
+#upload-result { white-space: pre-wrap; }

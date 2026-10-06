@@ -1,18 +1,24 @@
-async function api(path, opts) {
+async function api(path, opts = {}) {
   let resp;
   try {
     resp = await fetch(path, opts);
   } catch {
     throw new Error("连不上小灶的本地服务——它可能已经退出了。关掉启动窗口,重新打开一次小灶。");
   }
-  if (!resp.ok) {
-    throw new Error(`小灶的本地服务出错了(HTTP ${resp.status})——关掉启动窗口,重新打开一次小灶。`);
-  }
+  let data = null;
   try {
-    return await resp.json();
+    data = await resp.json();
   } catch {
+    data = null;
+  }
+  if (!resp.ok || (data && data.ok === false)) {
+    // 服务端给了人话就用它;没有才用兜底话术
+    throw new Error((data && data.message) || `小灶的本地服务出错(HTTP ${resp.status})——关掉启动窗口,重新打开一次小灶。`);
+  }
+  if (data === null) {
     throw new Error("小灶的回应看不懂——关掉启动窗口,重新打开一次小灶。");
   }
+  return data;
 }
 
 function show(id, text, ok) {
@@ -130,3 +136,116 @@ document.getElementById("btn-test").addEventListener("click", async () => {
     show("test-result", e.message, false);
   }
 });
+
+// ---------- 课件助手 ----------
+const courseList = document.getElementById("course-list");
+const courseFile = document.getElementById("course-file");
+const btnUpload = document.getElementById("btn-upload");
+let refreshTimer = null;
+
+function fmtSize(bytes) {
+  if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  return Math.max(1, Math.round(bytes / 1024)) + " KB";
+}
+
+function statusText(c) {
+  if (c.job && c.job.state === "running") {
+    return "解析中…" + (c.job.total ? `已到第 ${c.job.done} / ${c.job.total} 页` : "");
+  }
+  if (c.job && c.job.state === "failed") return "上次解析没成:" + c.job.message;
+  if (c.status && c.status.state === "done") {
+    return `解析好了(${c.status.pages} 页` +
+      (c.status.scanned_pages ? `,其中 ${c.status.scanned_pages} 页扫描件` : "") + ")";
+  }
+  if (c.status && c.status.state === "partial") {
+    return `解析没跑完(已好 ${c.status.parsed_pages} 页)——再点「解析」接着来`;
+  }
+  return "还没解析";
+}
+
+function makeBtn(text, onClick) {
+  const b = document.createElement("button");
+  b.textContent = text;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+async function refreshCourses() {
+  let courses;
+  try {
+    courses = await api("/api/courses");
+  } catch (e) {
+    show("upload-result", e.message, false);
+    return;
+  }
+  courseList.textContent = "";
+  for (const c of courses) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "course-name";
+    name.textContent = c.name; // textContent:文件名里的尖括号也当文字显示,不给注入的机会
+    const meta = document.createElement("span");
+    meta.className = "course-meta";
+    meta.textContent = fmtSize(c.size) + " · " + statusText(c);
+    const act = document.createElement("span");
+    act.className = "course-actions";
+    if (!(c.job && c.job.state === "running")) {
+      act.append(makeBtn("解析", () => runParse(c.id)));
+    }
+    act.append(makeBtn("删除", () => removeCourse(c)));
+    li.append(name, meta, act);
+    courseList.append(li);
+  }
+  if (courses.some((c) => c.job && c.job.state === "running")) {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(refreshCourses, 1500); // 有解析在跑:进度自己会动
+  }
+}
+
+async function runParse(courseId) {
+  try {
+    await api(`/api/courses/${courseId}/parse`, { method: "POST" });
+    show("upload-result", "开始解析——进度在列表里,这个页面别关。", true);
+    clearTimeout(refreshTimer);
+    refreshCourses();
+  } catch (e) {
+    show("upload-result", e.message, false);
+  }
+}
+
+async function removeCourse(c) {
+  try {
+    await api(`/api/courses/${c.id}`, { method: "DELETE" });
+    show("upload-result", `已删:${c.name}`, true);
+    refreshCourses();
+  } catch (e) {
+    show("upload-result", e.message, false);
+  }
+}
+
+btnUpload.addEventListener("click", async () => {
+  const file = courseFile.files[0];
+  if (!file) {
+    show("upload-result", "先选一个 PDF 文件。", false);
+    return;
+  }
+  btnUpload.disabled = true;
+  show("upload-result", "正在放进课件库…", true);
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await api("/api/courses", { method: "POST", body: fd });
+    show(
+      "upload-result",
+      r.is_new ? "已入库——点它后面的「解析」。" : "这份课件之前就放过了(内容一样,改了名也认得出来)——直接用就行。",
+      true
+    );
+    courseFile.value = "";
+    refreshCourses();
+  } catch (e) {
+    show("upload-result", e.message, false);
+  }
+  btnUpload.disabled = false;
+});
+
+refreshCourses();

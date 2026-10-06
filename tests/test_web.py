@@ -28,3 +28,9 @@ def test_js_and_css_are_served(tmp_path):
     c = make_client(tmp_path)
     assert c.get("/static/app.js").status_code == 200
     assert c.get("/static/style.css").status_code == 200
+
+
+def test_course_panel_is_real_ui_not_placeholder(tmp_path):
+    html = make_client(tmp_path).get("/").get_data(as_text=True)
+    assert 'id="course-file"' in html and 'id="btn-upload"' in html
+    assert "课件助手还没接上" not in html  # 占位话被真界面换掉了(下载页占位 M3 再换)

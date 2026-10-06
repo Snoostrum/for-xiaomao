@@ -1,5 +1,10 @@
+import io
 import logging
 import socket
+import threading
+import time
+
+import pymupdf
 
 from app.config import Config, load_config, save_config
 from app.logging_setup import setup_logging
@@ -127,3 +132,134 @@ def test_usage_endpoint_reports_totals(tmp_path):
     record_usage(tmp_path, "提问", "m", {"prompt_tokens": 5, "completion_tokens": 5})
     data = make_client(tmp_path).get("/api/usage").get_json()
     assert data["calls"] == 1 and data["prompt_tokens"] == 5
+
+
+# —— Task 10:课件接口(上传 / 列表 / 后台解析 / 删除)与人话错误 ——
+
+# brief 夹具的默认文字「第一页内容」只有 5 字,会被 SCANNED_TEXT_THRESHOLD=20 判成扫描页
+# (那样解析要走视觉模型、job 会 failed,与用例意图正好相反)。阈值是计划钉死的常量,不能动;
+# 只把示例文字补到 ≥20 字,页面角色与断言一字未改(T7/T8 同一个坑,同款修法)。
+def make_pdf_bytes(text="第一页内容:这一页的文字内容在这里,足够长,不会被当扫描页。") -> bytes:
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), text, fontname="china-s", fontsize=12)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def upload(client, name="讲义.pdf", content=None):
+    payload = content if content is not None else make_pdf_bytes()
+    return client.post(
+        "/api/courses", data={"file": (io.BytesIO(payload), name)}, content_type="multipart/form-data"
+    )
+
+
+def test_upload_list_delete_roundtrip(tmp_path):
+    c = make_client(tmp_path)
+    r = upload(c)
+    assert r.status_code == 200 and r.get_json()["is_new"] is True
+    course_id = r.get_json()["id"]
+    items = c.get("/api/courses").get_json()
+    assert len(items) == 1 and items[0]["name"] == "讲义.pdf"
+    assert items[0]["status"]["state"] == "none"
+    assert c.delete(f"/api/courses/{course_id}").status_code == 200
+    assert c.get("/api/courses").get_json() == []
+
+
+def test_same_pdf_with_new_name_is_not_duplicated(tmp_path):
+    # Review Focus #1:同一份课件(改了文件名)再来一次 → 不建第二条、不重复解析
+    # 夹具坑:pymupdf 每次 tobytes() 都会埋一个随机的 /ID,两次各生成一遍就是两份不同的字节
+    # (哈希入库会当成两份)。「同一份课件」= 同一串字节,所以先造一次、两次传同一份。
+    c = make_client(tmp_path)
+    payload = make_pdf_bytes()
+    first = upload(c, "讲义.pdf", payload).get_json()
+    second = upload(c, "讲义-最终版.pdf", payload).get_json()
+    assert second["is_new"] is False and second["id"] == first["id"]
+    assert len(c.get("/api/courses").get_json()) == 1
+
+
+def test_upload_non_pdf_is_human_error(tmp_path):
+    c = make_client(tmp_path)
+    # 非 ASCII 字节字面量在 bytes 里写不出来,拼出来才是合法 Python
+    r = upload(c, "照片.jpg", b"JFIF " + "我是图片".encode("utf-8"))
+    assert r.status_code == 400
+    assert "PDF" in r.get_json()["message"]
+    assert c.get("/api/courses").get_json() == []
+
+
+def test_upload_too_big_is_human_413(tmp_path):
+    c = make_client(tmp_path)
+    c.application.config["MAX_CONTENT_LENGTH"] = 100  # 测试里把上限调小,不用真造 200MB
+    r = upload(c, "大.pdf", b"%PDF-" + b"x" * 500)
+    assert r.status_code == 413
+    assert "太大" in r.get_json()["message"]
+
+
+def test_parse_endpoint_runs_in_background_and_reports_done(tmp_path):
+    c = make_client(tmp_path)
+    course_id = upload(c).get_json()["id"]
+    assert c.post(f"/api/courses/{course_id}/parse").status_code == 200
+    item = None
+    for _ in range(100):  # 后台线程:轮询等它跑完(纯文字 PDF,不需要模型)
+        item = c.get("/api/courses").get_json()[0]
+        if item.get("job", {}).get("state") in ("done", "failed"):
+            break
+        time.sleep(0.05)
+    assert item["job"]["state"] == "done"
+    assert item["status"]["state"] == "done"
+
+
+def test_parse_and_delete_bad_id_are_human(tmp_path):
+    c = make_client(tmp_path)
+    assert c.post("/api/courses/zzz/parse").status_code == 400
+    assert c.delete("/api/courses/zzz").status_code == 400
+
+
+def test_double_click_parse_starts_only_one_run(tmp_path, monkeypatch):
+    # T8 评审 M3:双击/双标签同时点「解析」——服务端抢占必须是原子的,
+    # 否则同一份课件会跑两遍解析(同一页问两遍视觉模型 = 重复花钱,meta.json.tmp 也会互踩)。
+    import app.server as server_mod
+    from app.courseware import course_file as real_course_file
+
+    app = create_app(tmp_path)
+    app.config["TESTING"] = True
+    clients = [app.test_client(), app.test_client()]
+    course_id = upload(clients[0]).get_json()["id"]
+
+    started: list[str] = []
+    holding = threading.Event()
+
+    def fake_parse(data_dir, cid, cfg, progress=None):
+        started.append(cid)
+        holding.wait(10)  # 卡住这一遍,让「正在跑」一直挂着
+        return {"pages": 1}
+
+    monkeypatch.setattr(server_mod, "parse_course", fake_parse)
+
+    both_at_the_door = threading.Barrier(2, timeout=10)
+
+    def slow_course_file(data_dir, cid):
+        # 两个请求都先在这里碰头,再一起往下走——把竞争的窗口撑开到必现
+        both_at_the_door.wait()
+        return real_course_file(data_dir, cid)
+
+    monkeypatch.setattr(server_mod, "course_file", slow_course_file)
+
+    responses = []
+
+    def post_parse(client):
+        responses.append(client.post(f"/api/courses/{course_id}/parse"))
+
+    threads = [threading.Thread(target=post_parse, args=(c,)) for c in clients]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+
+    assert [r.status_code for r in responses] == [200, 200]
+    deadline = time.time() + 5
+    while not started and time.time() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.3)  # 没锁的话,第二个解析会在这一小段里冒头
+    holding.set()
+    assert started == [course_id]  # 两个请求同时到,只准跑一遍
