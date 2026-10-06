@@ -5,15 +5,13 @@ import logging
 import requests
 
 from app.config import Config
+from app.errors import HumanError
 
 log = logging.getLogger(__name__)
 
 
-class LLMError(Exception):
-    def __init__(self, human: str, detail: str = ""):
-        super().__init__(human)
-        self.human = human
-        self.detail = detail
+class LLMError(HumanError):
+    """调用模型失败的统一异常。构造签名与以前一致:(人话, 细节)。"""
 
 
 def _chat_url(cfg: Config) -> str:
@@ -31,6 +29,11 @@ def _post_chat(cfg: Config, payload: dict, timeout: float) -> dict:
         raise LLMError("安全连接没建起来(SSL 错误)——检查『接口地址』填对了没有。", f"{e} | {url}")
     except requests.exceptions.ConnectionError as e:
         raise LLMError(f"连不上 {url} ——检查网络,或确认『接口地址』填对了。", f"{e} | {url}")
+    except (requests.exceptions.InvalidHeader, requests.exceptions.InvalidURL, UnicodeEncodeError) as e:
+        raise LLMError(
+            "『Key』或『接口地址』里有奇怪的字符(编码不对)——检查有没有混进表情或特殊符号。",
+            f"{e!r} | {url}",
+        )
     except requests.exceptions.RequestException as e:
         raise LLMError(f"连不上 {url} ——检查网络;或确认『接口地址』填对了(要以 http:// 或 https:// 开头)。", f"{e} | {url}")
 
@@ -40,6 +43,11 @@ def _post_chat(cfg: Config, payload: dict, timeout: float) -> dict:
         raise LLMError("账户余额不足——去平台充值,或者先用免费模型。", resp.text[:300])
     if resp.status_code == 403:
         raise LLMError("平台拒绝了这个请求(403)——可能是地区限制或权限问题。", resp.text[:300])
+    if resp.status_code == 400:
+        raise LLMError(
+            "平台说这个请求不对(400)——常见原因是『模型名』填错了(也可能是请求内容有问题)。去「设置」里核对一下。",
+            resp.text[:300],
+        )
     if resp.status_code == 404:
         raise LLMError("接口地址或模型名不对(404)——检查『接口地址』和『模型名』。", resp.text[:300])
     if resp.status_code == 429:
@@ -55,14 +63,22 @@ def _post_chat(cfg: Config, payload: dict, timeout: float) -> dict:
         raise LLMError("对方的回应看不懂(不是 JSON)——可能接口地址不对。", resp.text[:300])
 
 
-def chat_completion(cfg: Config, messages: list[dict], max_tokens: int = 1024, timeout: float = 60.0) -> str:
-    payload = {"model": cfg.model, "messages": messages, "max_tokens": max_tokens}
-    data = _post_chat(cfg, payload, timeout)
+def _extract_text(data: dict) -> str:
     try:
         # content 偶尔是 null(只有推理没有正文),别把 None 当回复带出去
         return data["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError):
         raise LLMError("回应里没有文本内容——可能模型名不对。", str(data)[:300])
+
+
+def chat_completion_full(cfg: Config, messages: list[dict], max_tokens: int = 1024, timeout: float = 60.0) -> tuple[str, dict]:
+    """返回 (正文, 用量)。用量给「成本可见」用;平台没给就给空 dict。"""
+    data = _post_chat(cfg, {"model": cfg.model, "messages": messages, "max_tokens": max_tokens}, timeout)
+    return _extract_text(data), (data.get("usage") or {})
+
+
+def chat_completion(cfg: Config, messages: list[dict], max_tokens: int = 1024, timeout: float = 60.0) -> str:
+    return chat_completion_full(cfg, messages, max_tokens=max_tokens, timeout=timeout)[0]
 
 
 def test_connection(cfg: Config) -> tuple[bool, str]:

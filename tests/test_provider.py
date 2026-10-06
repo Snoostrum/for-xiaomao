@@ -3,7 +3,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app.config import Config
-from app.llm.provider import chat_completion, test_connection
+from app.llm.provider import chat_completion, chat_completion_full, test_connection
 
 # pytest 会把导入的 test_connection 当成用例去收集(名字以 test 开头),显式声明它不是测试。
 test_connection.__test__ = False
@@ -104,3 +104,53 @@ def test_base_url_without_scheme_gets_human_message():
     cfg = Config(provider="custom", base_url="example.com/v1", api_key="k", model="m")
     ok, msg = test_connection(cfg)
     assert ok is False and "连不上" in msg and "http" in msg
+
+
+def test_400_tells_user_model_name_or_content():
+    with FakeLLM(status=400) as fake:
+        ok, msg = test_connection(cfg_for(fake))
+        assert ok is False
+        assert "400" in msg and "模型名" in msg  # 口径:模型名或请求内容,别一口咬死
+
+
+def test_404_tells_user_url_or_model():
+    with FakeLLM(status=404) as fake:
+        ok, msg = test_connection(cfg_for(fake))
+        assert ok is False and "接口地址" in msg
+
+
+def test_500_says_platform_side_error():
+    with FakeLLM(status=500) as fake:
+        ok, msg = test_connection(cfg_for(fake))
+        assert ok is False and "对方服务器" in msg
+
+
+def test_non_latin1_key_gets_human_message_not_crash():
+    # 口子⑧:Key 里混进中文/表情 → http.client 编码炸 → 以前是 Flask 500,现在是测试连接的人话
+    with FakeLLM() as fake:
+        cfg = cfg_for(fake)
+        cfg.api_key = "sk-密钥"
+        ok, msg = test_connection(cfg)
+        assert ok is False and "字符" in msg
+
+
+def test_non_latin1_base_url_gets_human_message_not_crash():
+    # 同上,地址那一半:表情域名让 requests 连 URL 都拼不出来(InvalidURL),也得给人话而不是 500
+    cfg = Config(provider="custom", base_url="http://😀.com/v1", api_key="k", model="m")
+    ok, msg = test_connection(cfg)
+    assert ok is False and "字符" in msg
+
+
+def test_chat_completion_full_returns_usage():
+    body = {"choices": [{"message": {"content": "收到"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2}}
+    with FakeLLM(body=body) as fake:
+        text, usage = chat_completion_full(cfg_for(fake), [{"role": "user", "content": "hi"}])
+        assert text == "收到"
+        assert usage["prompt_tokens"] == 3
+
+
+def test_chat_completion_full_missing_usage_gives_empty_dict():
+    with FakeLLM() as fake:  # 默认 body 不带 usage
+        _text, usage = chat_completion_full(cfg_for(fake), [{"role": "user", "content": "hi"}])
+        assert usage == {}
