@@ -83,3 +83,22 @@ def test_chat_loop_says_goodbye_on_eof(tmp_path):
     out: list[str] = []
     chat_loop(tmp_path, "http://127.0.0.1:1/", input_fn=make_input([]), print_fn=out.append)
     assert any("再见" in line for line in out)
+
+
+def test_chat_loop_survives_unexpected_error(tmp_path, monkeypatch):
+    import app.chat as chat_mod
+
+    save_config(tmp_path, Config(provider="custom", base_url="http://127.0.0.1:1/v1", api_key="k", model="m"))
+    calls = {"n": 0}
+
+    def boom(cfg, history, text):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("模拟意外")
+        return "好了"
+
+    monkeypatch.setattr(chat_mod, "chat_turn", boom)
+    out: list[str] = []
+    chat_loop(tmp_path, "http://127.0.0.1:1/", input_fn=make_input(["一句", "再一句", "退出"]), print_fn=out.append)
+    assert any("意外" in line for line in out)
+    assert any("好了" in line for line in out)  # 意外之后还能接着聊

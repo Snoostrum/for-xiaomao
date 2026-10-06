@@ -90,5 +90,9 @@ def chat_loop(
         except KeyboardInterrupt:
             print_fn("")
             break
+        except Exception:  # 兜底:一句意外不应该把窗口关掉
+            log.exception("终端聊天出了意外")
+            print_fn("小灶> 出了点意外——细节记在日志里了,再说一句试试。")
+            continue
         print_fn(f"小灶> {answer}")
     print_fn("再见——这个窗口可以关了。")
