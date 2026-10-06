@@ -90,6 +90,11 @@ def test_chat_completion_returns_text():
         assert chat_completion(cfg_for(fake), [{"role": "user", "content": "hi"}]) == "收到"
 
 
+def test_null_content_comes_back_as_empty_string():
+    with FakeLLM(body={"choices": [{"message": {"content": None}}]}) as fake:
+        assert chat_completion(cfg_for(fake), [{"role": "user", "content": "hi"}]) == ""
+
+
 def test_missing_key_says_so():
     ok, msg = test_connection(Config())
     assert ok is False and "Key" in msg

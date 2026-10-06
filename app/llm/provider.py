@@ -59,7 +59,8 @@ def chat_completion(cfg: Config, messages: list[dict], max_tokens: int = 1024, t
     payload = {"model": cfg.model, "messages": messages, "max_tokens": max_tokens}
     data = _post_chat(cfg, payload, timeout)
     try:
-        return data["choices"][0]["message"]["content"]
+        # content 偶尔是 null(只有推理没有正文),别把 None 当回复带出去
+        return data["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError):
         raise LLMError("回应里没有文本内容——可能模型名不对。", str(data)[:300])
 

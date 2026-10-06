@@ -7,6 +7,7 @@ import threading
 import webbrowser
 from pathlib import Path
 
+import flask.cli
 from flask import Flask, jsonify, request, send_from_directory
 
 from app import __version__
@@ -97,7 +98,8 @@ def create_app(data_dir: Path) -> Flask:
     return app
 
 
-def run_server(data_dir: Path, port: int = 8756, open_browser: bool = True) -> None:
+def start_server(data_dir: Path, port: int = 8756, open_browser: bool = True) -> tuple[int, str]:
+    """在后台线程把服务起起来,立刻返回 (真实端口, 地址)——黑窗口留给终端聊天用。"""
     setup_logging(data_dir)
     app = create_app(data_dir)
     real_port = find_free_port(port)
@@ -107,6 +109,9 @@ def run_server(data_dir: Path, port: int = 8756, open_browser: bool = True) -> N
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     log.info("小灶启动于 %s(数据目录 %s)", url, data_dir)
-    print(f"小灶已启动:{url}")
-    print("(关掉这个窗口就会退出)")
-    app.run(host="127.0.0.1", port=real_port, debug=False, use_reloader=False)
+    flask.cli.show_server_banner = lambda *a, **k: None  # 黑窗口留给聊天,不印 Flask 的横幅
+    threading.Thread(
+        target=lambda: app.run(host="127.0.0.1", port=real_port, debug=False, use_reloader=False),
+        daemon=True,
+    ).start()
+    return real_port, url
