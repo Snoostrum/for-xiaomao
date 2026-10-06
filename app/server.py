@@ -6,6 +6,7 @@ import sys
 import threading
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
 
 import flask.cli
 from flask import Flask, jsonify, request, send_from_directory
@@ -38,6 +39,22 @@ def create_app(data_dir: Path) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.config["DATA_DIR"] = data_dir
     web_dir = Path(__file__).resolve().parent / "web"
+
+    def _local_origin_ok(origin: str) -> bool:
+        """Origin 头只认本机。浏览器发跨站请求一定会带 Origin;curl/测试不带,放行。"""
+        try:
+            return urlparse(origin).hostname in ("127.0.0.1", "localhost")
+        except ValueError:
+            return False
+
+    @app.before_request
+    def _guard_cross_origin():
+        if request.method in ("POST", "PUT", "DELETE"):
+            origin = request.headers.get("Origin", "")
+            if origin and not _local_origin_ok(origin):
+                log.warning("拒绝了来自 %s 的 %s %s", origin, request.method, request.path)
+                return jsonify({"ok": False, "message": "这个请求不是从小灶页面发出来的,已拒绝。"}), 403
+        return None
 
     @app.get("/")
     def index():
@@ -72,7 +89,9 @@ def create_app(data_dir: Path) -> Flask:
 
     @app.post("/api/config")
     def api_save_config():
-        body = request.get_json(force=True, silent=True) or {}
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "message": "请求格式不对(需要 JSON 对象)——请在页面上操作。"}), 400
         cfg = load_config(data_dir)
         cfg.provider = str(body.get("provider", cfg.provider)).strip()
         cfg.base_url = str(body.get("base_url", cfg.base_url)).strip()
