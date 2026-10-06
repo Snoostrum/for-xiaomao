@@ -195,7 +195,7 @@ def parse_course(data_dir: Path, course_id: str, cfg: Config, progress: Progress
                         e.detail,
                     )
                 if not text:
-                    text = "(这一页模型没说出内容;可以之后再点一次「解析」重看)"  # 空回答不留白页
+                    text = "(这一页模型没说出内容)"  # 空回答不留白页
                 page_md(cache, n).write_text(text, encoding="utf-8")
                 if progress:
                     progress(n, total)

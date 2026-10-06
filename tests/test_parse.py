@@ -325,6 +325,7 @@ def test_vision_failure_keeps_pages_and_resumes(tmp_path):
         with pytest.raises(CoursewareError) as ei:
             parse_course(data, cid, cfg_for(fake))
     assert "接着来" in str(ei.value)
+    assert len(fake.requests) == 2  # 恰好重试一次:一页扫描页失败最多花两次请求的钱
     assert page_md(cache_dir(data, cid), 1).exists()  # 文字页留着
     assert read_meta(data, cid) is None               # 没跑完 = 没有完成标记
     with FakeLLM(body=vision_body("补上的")) as fake2:
