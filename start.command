@@ -1,6 +1,7 @@
 #!/bin/bash
 # 小灶 · Mac 启动器(双击运行)
 cd "$(dirname "$0")" || exit 1
+echo "正在启动小灶…(服务起来后浏览器会自动打开;这个窗口别关)"
 PY=./python/bin/python3
 if [ -x "$PY" ]; then
   :                                          # 包内 Python 可用
