@@ -95,3 +95,33 @@ def test_missing_usage_still_records_a_call(tmp_path):
     assert answer == "收到"
     assert usage_totals(data)["calls"] == 1
     assert usage_totals(data)["prompt_tokens"] == 0
+
+
+# —— fix round:最终评审 F2(提问前核对缓存完整性)——
+
+
+def test_missing_pages_stop_the_question_before_spending(tmp_path):
+    # F2:meta 说解析好了、pages/ 里却少了页(验收清单就会亲手删掉一半)——
+    # 残卷不许当「课件全文」交给模型:人话拦下,一个请求都不发,一分钱不花
+    data = tmp_path / "data"
+    cid = seed_parsed(data, tmp_path, ["第一页讲向量", "第二页讲矩阵乘法", "第三页讲特征值"])
+    page_md(cache_dir(data, cid), 2).unlink()
+    with FakeLLM() as fake:
+        with pytest.raises(CoursewareError) as ei:
+            ask_course(data, cid, "矩阵乘法在哪页?", cfg_for(fake))
+        assert fake.requests == []  # 一个模型请求都没发
+    assert "缺" in str(ei.value) and "解析" in str(ei.value)
+    assert usage_totals(data)["calls"] == 0
+
+
+def test_stray_md_file_in_pages_is_ignored(tmp_path):
+    # F2 附带:pages/ 里混进非数字名的 .md(以前 int(文件名) 直接 ValueError → 500);
+    # 它也不许混进交给模型的全文
+    data = tmp_path / "data"
+    cid = seed_parsed(data, tmp_path, ["第一页讲向量,内容够长不会被当扫描页。", "第二页讲矩阵乘法,内容也够长。"])
+    (cache_dir(data, cid) / "pages" / "笔记.md").write_text("随手记的东西", encoding="utf-8")
+    with FakeLLM() as fake:
+        answer = ask_course(data, cid, "讲了啥?", cfg_for(fake))
+        sent = fake.requests[0]["json"]["messages"][0]["content"]
+    assert answer == "收到"
+    assert "随手记" not in sent

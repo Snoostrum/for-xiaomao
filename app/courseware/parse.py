@@ -60,11 +60,25 @@ def read_meta(data_dir: Path, course_id: str) -> dict | None:
         return None
     try:
         meta = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if not isinstance(meta, dict):
+            return None
+        # version 被人手改坏(不是数字)也算「读不动」:别让 int() 逃出去把接口带崩
+        version = int(meta.get("version") or 0)
+    except (OSError, ValueError, TypeError):
         return None
-    if not isinstance(meta, dict) or int(meta.get("version") or 0) != PARSE_VERSION:
+    if version != PARSE_VERSION:
         return None
     return meta
+
+
+def _write_page_md(cache: Path, n: int, text: str) -> None:
+    """写一页 Markdown。先落临时文件再改名——续传把「文件在」当「这页已解析好」,
+    直接写一半就断电的话,残页会被当成解析结果,重跑也不会补(同 meta.json 的写法)。
+    """
+    target = page_md(cache, n)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(target)
 
 
 def parse_text_layer(data_dir: Path, course_id: str, progress: Progress | None = None) -> dict:
@@ -97,7 +111,7 @@ def parse_text_layer(data_dir: Path, course_id: str, progress: Progress | None =
             if target.exists():  # 续传:这页之前抽过
                 done += 1
                 continue
-            target.write_text(text, encoding="utf-8")
+            _write_page_md(cache, n, text)
             done += 1
             if progress:
                 progress(n, total)
@@ -196,7 +210,7 @@ def parse_course(data_dir: Path, course_id: str, cfg: Config, progress: Progress
                     )
                 if not text:
                     text = "(这一页模型没说出内容)"  # 空回答不留白页
-                page_md(cache, n).write_text(text, encoding="utf-8")
+                _write_page_md(cache, n, text)
                 if progress:
                     progress(n, total)
         finally:

@@ -30,9 +30,11 @@ def _post_chat(cfg: Config, payload: dict, timeout: float) -> dict:
     except requests.exceptions.ConnectionError as e:
         raise LLMError(f"连不上 {url} ——检查网络,或确认『接口地址』填对了。", f"{e} | {url}")
     except (requests.exceptions.InvalidHeader, requests.exceptions.InvalidURL, UnicodeEncodeError) as e:
+        # 这类异常的原文里嵌着出事的请求头(=「Bearer <Key>」)整份原文,detail 会被记进
+        # data/logs/app.log;只留异常类型和地址,诊断够用,Key 不落盘。
         raise LLMError(
             "『Key』或『接口地址』里有奇怪的字符(编码不对)——检查有没有混进表情或特殊符号。",
-            f"{e!r} | {url}",
+            f"{type(e).__name__} | {url}",
         )
     except requests.exceptions.RequestException as e:
         raise LLMError(f"连不上 {url} ——检查网络;或确认『接口地址』填对了(要以 http:// 或 https:// 开头)。", f"{e} | {url}")
@@ -74,7 +76,10 @@ def _extract_text(data: dict) -> str:
 def chat_completion_full(cfg: Config, messages: list[dict], max_tokens: int = 1024, timeout: float = 60.0) -> tuple[str, dict]:
     """返回 (正文, 用量)。用量给「成本可见」用;平台没给就给空 dict。"""
     data = _post_chat(cfg, {"model": cfg.model, "messages": messages, "max_tokens": max_tokens}, timeout)
-    return _extract_text(data), (data.get("usage") or {})
+    text = _extract_text(data)  # 先取正文:顺手挡下"回应不是对象"这种形状不对的 JSON
+    usage = data.get("usage")
+    # usage 只当对象用;平台要是回了字符串/数字,当没给(钱照记账上,别把答案丢了)
+    return text, (usage if isinstance(usage, dict) else {})
 
 
 def chat_completion(cfg: Config, messages: list[dict], max_tokens: int = 1024, timeout: float = 60.0) -> str:

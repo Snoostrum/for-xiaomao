@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pymupdf
 import pytest
@@ -226,6 +227,42 @@ def test_read_meta_ignores_missing_broken_and_old_version(tmp_path):
     assert read_meta(data, cid) is None  # 老版本:自动作废
     mf.write_text(json.dumps({"version": PARSE_VERSION, "pages": 1, "scanned_pages": []}), encoding="utf-8")
     assert read_meta(data, cid) == {"version": PARSE_VERSION, "pages": 1, "scanned_pages": []}
+
+
+def test_read_meta_ignores_non_numeric_version(tmp_path):
+    # M1:version 被手改坏(不是数字)→ 当「没解析完」,而不是让 int() 逃出去把接口带崩
+    data = tmp_path / "data"
+    cid = add_course(data, tmp_path, ["这一页的文字内容在这里,足够长,不会被当扫描页。"])
+    mf = cache_dir(data, cid) / "meta.json"
+    mf.parent.mkdir(parents=True, exist_ok=True)
+    for bad in ("一", [1], {"v": 1}):
+        mf.write_text(json.dumps({"version": bad, "pages": 1}), encoding="utf-8")
+        assert read_meta(data, cid) is None
+    mf.write_text("[1, 2, 3]", encoding="utf-8")  # 整个文件不是对象
+    assert read_meta(data, cid) is None
+
+
+def test_interrupted_page_write_is_not_treated_as_parsed(tmp_path, monkeypatch):
+    # M8:页 md 直接 write_text 的话,写一半断电会留下半截页面文件,续传看「文件在」
+    # 就以为这页解析好了,残页永远补不回来;改成 tmp+replace 后,半截只落在 .tmp 里,不算数。
+    data = tmp_path / "data"
+    cid = add_course(data, tmp_path, ["这一页的文字内容在这里,足够长,不会被当扫描页。"])
+    real_write_text = Path.write_text
+
+    def torn_write(self, text, **kw):
+        if self.suffix == ".tmp":  # 页面文件那次写:写一半就断电
+            real_write_text(self, text[:5], encoding="utf-8")
+            raise OSError("断电了")
+        return real_write_text(self, text, **kw)
+
+    monkeypatch.setattr(Path, "write_text", torn_write)
+    with pytest.raises(OSError):
+        parse_text_layer(data, cid)
+    monkeypatch.undo()
+    assert not page_md(cache_dir(data, cid), 1).exists()  # 半截页没有冒充「已解析」
+    assert parse_text_layer(data, cid)["done_pages"] == 1  # 重来:这页照抽不误
+    assert "这一页" in page_md(cache_dir(data, cid), 1).read_text(encoding="utf-8")
+    assert not list((cache_dir(data, cid) / "pages").glob("*.tmp"))  # 收尾不留临时文件
 
 
 def test_course_status_done_reads_meta(tmp_path):

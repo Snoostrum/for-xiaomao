@@ -19,9 +19,14 @@ class CoursewareError(HumanError):
     """课件流程里说给用户听的人话错误;server 统一翻成 400 + message。"""
 
 
+def is_course_id(course_id: str) -> bool:
+    """像不像小灶自己发的课件 id。列表接口用它过滤目录里人手放进去的杂物。"""
+    return bool(_ID_RE.match(course_id or ""))
+
+
 def check_course_id(course_id: str) -> str:
     """课件 id 只认 16 位小写十六进制——顺带挡住 ../ 这类路径穿越。"""
-    if not _ID_RE.match(course_id or ""):
+    if not is_course_id(course_id):
         raise CoursewareError("课件编号不对——刷新页面再试。")
     return course_id
 

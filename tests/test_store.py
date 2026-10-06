@@ -67,3 +67,57 @@ def test_bad_course_id_is_rejected(tmp_path):
         course_file(tmp_path, "../../etc/passwd")
     with pytest.raises(CoursewareError):
         delete_course(tmp_path, "Z" * 16)
+
+
+# —— fix round:最终评审 F1(去重命中不补说明文件)与 M1(脏数据不整垮列表)——
+
+
+def test_reupload_repairs_missing_meta(tmp_path):
+    # F1:原件在、说明丢了 → 这份课件在列表里隐身,而重传以前直接「之前就放过了」走人,
+    # 永远补不回来。现在重传必须顺手把说明补上,列表自愈。
+    cid, _ = upload(tmp_path, PDF_A, "讲义.pdf")
+    course_meta_file(tmp_path, cid).unlink()
+    assert list_courses(tmp_path) == []  # 只有原件没有说明:列表里看不见它
+    cid2, is_new = upload(tmp_path, PDF_A, "讲义-重传.pdf")
+    assert (cid2, is_new) == (cid, False)  # 内容相同:还是同一份,不是新入库
+    assert [c["id"] for c in list_courses(tmp_path)] == [cid]  # 补上说明,列表里回来了
+
+
+def test_reupload_repairs_half_written_meta(tmp_path):
+    # F1 的另一半:说明文件只有半截(断电/手改坏)——同样要自愈
+    cid, _ = upload(tmp_path, PDF_A, "讲义.pdf")
+    course_meta_file(tmp_path, cid).write_text('{"name": "讲义.pd', encoding="utf-8")
+    assert list_courses(tmp_path) == []
+    cid2, is_new = upload(tmp_path, PDF_A, "讲义.pdf")
+    assert (cid2, is_new) == (cid, False)
+    assert [c["name"] for c in list_courses(tmp_path)] == ["讲义.pdf"]
+
+
+def test_reupload_keeps_the_first_display_name(tmp_path):
+    # 说明文件好好的时候,重传不改显示名——首传叫什么就一直叫什么
+    upload(tmp_path, PDF_A, "讲义.pdf")
+    upload(tmp_path, PDF_A, "讲义-最终版.pdf")
+    assert list_courses(tmp_path)[0]["name"] == "讲义.pdf"
+
+
+def test_list_skips_junk_in_the_library(tmp_path):
+    # M1:名字不是小灶发的 id 的 json、半截的 json、没有原件的 json——
+    # 一条脏数据不许整垮 /api/courses(以前不合规的 stem 会一路撞到 course_status 的「编号不对」)
+    cid, _ = upload(tmp_path, PDF_A, "讲义.pdf")
+    courses = tmp_path / "courses"
+    (courses / "乱七八糟.json").write_text(json.dumps({"name": "手放的"}), encoding="utf-8")
+    (courses / "乱七八糟.pdf").write_bytes(PDF_B)  # 连原件都摆上,一样不许进列表
+    (courses / ("c" * 16 + ".json")).write_text("{ 半截", encoding="utf-8")
+    (courses / ("c" * 16 + ".pdf")).write_bytes(PDF_B)
+    (courses / ("d" * 16 + ".json")).write_text(json.dumps({"name": "孤儿"}), encoding="utf-8")
+    assert [c["id"] for c in list_courses(tmp_path)] == [cid]
+
+
+def test_list_skips_course_with_dirty_size(tmp_path):
+    # M1:size 被手改成不是数字的东西 → 跳过这一条(以前 int() 抛 TypeError 让列表 500),别的照列
+    bad, _ = upload(tmp_path, PDF_A, "坏的.pdf")
+    good, _ = upload(tmp_path, PDF_B, "好的.pdf")
+    meta = json.loads(course_meta_file(tmp_path, bad).read_text(encoding="utf-8"))
+    meta["size"] = {"不是": "数字"}
+    course_meta_file(tmp_path, bad).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    assert [c["id"] for c in list_courses(tmp_path)] == [good]

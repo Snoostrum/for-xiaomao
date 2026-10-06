@@ -88,6 +88,12 @@ def create_app(data_dir: Path) -> Flask:
                 return jsonify({"ok": False, "message": "这个请求不是从小灶页面发出来的,已拒绝。"}), 403
         return None
 
+    @app.after_request
+    def _forbid_framing(resp):
+        # 别的网页把小灶页面套进 iframe 里骗点击:一律不许(和跨站 Origin 403 是同族收口)
+        resp.headers["X-Frame-Options"] = "DENY"
+        return resp
+
     @app.get("/")
     def index():
         return send_from_directory(web_dir, "index.html")
@@ -234,8 +240,13 @@ def create_app(data_dir: Path) -> Flask:
         if not isinstance(body, dict):
             return jsonify({"ok": False, "message": "请求格式不对——用页面上的输入框问。"}), 400
         cfg = load_config(data_dir)
-        # 出错(没解析、太长、Key 不对……)会抛 HumanError,由统一 errorhandler 翻成 400 人话
-        answer = ask_course(data_dir, course_id, str(body.get("question") or ""), cfg)
+        try:
+            # 出错(没解析、缺页、太长、Key 不对……)会抛 HumanError,由统一 errorhandler 翻成 400 人话
+            answer = ask_course(data_dir, course_id, str(body.get("question") or ""), cfg)
+        except OSError:
+            # 读页途中课件被删(删除正好落在这几毫秒里):给一句对得上号的人话,别 500 也别劝重启
+            log.warning("提问课件 %s 时读文件失败——多半是课件被删了", course_id, exc_info=True)
+            return jsonify({"ok": False, "message": "这份课件在提问中途被删了——换一份问吧。"}), 400
         return jsonify({"ok": True, "answer": answer})
 
     @app.errorhandler(413)

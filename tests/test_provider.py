@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -154,3 +155,26 @@ def test_chat_completion_full_missing_usage_gives_empty_dict():
     with FakeLLM() as fake:  # 默认 body 不带 usage
         _text, usage = chat_completion_full(cfg_for(fake), [{"role": "user", "content": "hi"}])
         assert usage == {}
+
+
+# —— fix round:最终评审 F3(Key 原文落日志)与 M3(脏 usage 丢答案)——
+
+
+def test_non_latin1_key_is_not_written_into_the_log(caplog):
+    # F3:从中文教程整行粘 Key → 请求头编码失败,异常原文里就嵌着「Bearer sk-密钥」。
+    # 以前 repr(e) 原样写进 detail,一路记进 data/logs/app.log,等于把 Key 抄进文件。
+    with FakeLLM() as fake:
+        cfg = cfg_for(fake)
+        cfg.api_key = "sk-密钥"
+        with caplog.at_level(logging.WARNING):
+            ok, msg = test_connection(cfg)
+    assert ok is False and "字符" in msg
+    assert "sk-密钥" not in caplog.text
+
+
+def test_non_dict_usage_does_not_lose_the_answer():
+    # M3:平台把 usage 回成字符串(不是对象)→ 答案照给,用量当没给,不能 500 把答案丢了
+    body = {"choices": [{"message": {"content": "收到"}}], "usage": "n/a"}
+    with FakeLLM(body=body) as fake:
+        text, usage = chat_completion_full(cfg_for(fake), [{"role": "user", "content": "hi"}])
+    assert text == "收到" and usage == {}

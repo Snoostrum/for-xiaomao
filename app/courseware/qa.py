@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from app.config import Config
-from app.courseware import CoursewareError, cache_dir
+from app.courseware import CoursewareError, cache_dir, page_md
 from app.courseware.parse import read_meta
 from app.llm.provider import LLMError, chat_completion_full
 from app.usage import record_usage
@@ -34,12 +34,29 @@ ASK_PROMPT = """你在帮学生看课件。下面是课件的全文,按页分隔
 
 
 def build_corpus(data_dir: Path, course_id: str) -> str:
-    """把所有已解析的页拼成带页码标记的全文。"""
-    pages_dir = cache_dir(data_dir, course_id) / "pages"
-    parts = []
-    for p in sorted(pages_dir.glob("*.md"), key=lambda x: int(x.stem)):
-        n = int(p.stem)
-        parts.append(f"=== 第 {n} 页 ===\n{p.read_text(encoding='utf-8').strip()}")
+    """把所有已解析的页拼成带页码标记的全文;没解析完或缺页时抛 CoursewareError(人话)。
+
+    按 meta 记的页数逐页读,而不是扫 pages/ 目录:少一页(缓存被删了一半、解析没跑完)
+    就得当场拦下来——残卷当「课件全文」交给模型,答案和账单都是错的。
+    逐页读也顺手绕开了 glob 排序 + int(文件名):pages/ 里混进别的 .md 也不会炸。
+    """
+    meta = read_meta(data_dir, course_id)
+    if meta is None:
+        raise CoursewareError("这份课件还没解析完——先点「解析」,解析完再问。")
+    try:
+        pages = int(meta.get("pages") or 0)
+    except (ValueError, TypeError):  # 说明文件被手改坏:按「没解析完」报人话,别 500
+        pages = 0
+    if pages <= 0:
+        raise CoursewareError("这份课件还没解析完——先点「解析」,解析完再问。")
+    cache = cache_dir(data_dir, course_id)
+    missing = [n for n in range(1, pages + 1) if not page_md(cache, n).exists()]
+    if missing:
+        raise CoursewareError(f"缓存缺了 {len(missing)} 页——先点「解析」补齐再问。")
+    parts = [
+        f"=== 第 {n} 页 ===\n{page_md(cache, n).read_text(encoding='utf-8').strip()}"
+        for n in range(1, pages + 1)
+    ]
     return "\n\n".join(parts)
 
 
@@ -48,9 +65,7 @@ def ask_course(data_dir: Path, course_id: str, question: str, cfg: Config) -> st
     question = question.strip()
     if not question:
         raise CoursewareError("问题还没写呢。")
-    if read_meta(data_dir, course_id) is None:
-        raise CoursewareError("这份课件还没解析完——先点「解析」,解析完再问。")
-    corpus = build_corpus(data_dir, course_id)
+    corpus = build_corpus(data_dir, course_id)  # 没解析完、缓存缺页都从这里抛人话
     if len(corpus) > MAX_CORPUS_CHARS:
         raise CoursewareError(
             f"这份课件太长了(约 {len(corpus) // 1000} 千字),一次塞不进模型——"

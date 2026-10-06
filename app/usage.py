@@ -41,7 +41,14 @@ def usage_totals(data_dir: Path) -> dict:
                 e = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(e, dict):
+                continue  # 合法 JSON 但不是对象(比如一行 123):跳过,别在 .get 上炸
             calls += 1
-            prompt += int(e.get("prompt_tokens") or 0)
-            completion += int(e.get("completion_tokens") or 0)
+            try:
+                prompt_tokens = int(e.get("prompt_tokens") or 0)
+                completion_tokens = int(e.get("completion_tokens") or 0)
+            except (ValueError, TypeError):
+                continue  # token 数字是脏的:次数照算(账本不漏次),数字不计
+            prompt += prompt_tokens
+            completion += completion_tokens
     return {"calls": calls, "prompt_tokens": prompt, "completion_tokens": completion}

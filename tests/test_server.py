@@ -400,3 +400,50 @@ def test_ask_unparsed_course_is_human(tmp_path):
 def test_ask_non_object_body_is_400(tmp_path):
     r = make_client(tmp_path).post("/api/courses/zzz/ask", json=[1, 2])
     assert r.status_code == 400 and r.get_json()["ok"] is False
+
+
+# —— fix round:最终评审 M1/M2/M4/M5 ——
+
+
+def test_courses_endpoint_survives_junk_in_the_library(tmp_path):
+    # M1:课件夹里的脏数据(名字不合规的 json、半截 json)不能让 /api/courses 整条垮掉
+    c = make_client(tmp_path)
+    course_id = upload(c).get_json()["id"]
+    courses = tmp_path / "courses"
+    (courses / "乱七八糟.json").write_text('{"name": "手放的"}', encoding="utf-8")
+    (courses / "乱七八糟.pdf").write_bytes(b"%PDF-1.4 " + "手放的".encode("utf-8"))  # 以前这条会让接口整个失败
+    (courses / ("c" * 16 + ".json")).write_text("{ 半截", encoding="utf-8")
+    r = c.get("/api/courses")
+    assert r.status_code == 200
+    assert [it["id"] for it in r.get_json()] == [course_id]
+
+
+def test_usage_endpoint_survives_dirty_lines(tmp_path):
+    # M2:账本里混进脏行(合法 JSON 非对象、token 不是数字)→ /api/usage 照样 200
+    with (tmp_path / "usage.jsonl").open("a", encoding="utf-8") as f:
+        f.write("123\n")
+        f.write('{"prompt_tokens": "很多"}\n')
+    r = make_client(tmp_path).get("/api/usage")
+    assert r.status_code == 200
+    assert r.get_json()["calls"] == 1  # 是一次调用,只是 token 数字脏了
+
+
+def test_ask_survives_the_course_being_deleted_mid_question(tmp_path, monkeypatch):
+    # M4:提问读页途中课件被删 → 400 人话(以前 FileNotFoundError 500,还劝人去重启小灶)
+    import app.server as server_mod
+
+    def gone(*_a, **_k):
+        raise FileNotFoundError("课件被删了")
+
+    c = make_client(tmp_path)
+    course_id = upload(c).get_json()["id"]
+    monkeypatch.setattr(server_mod, "ask_course", gone)
+    r = c.post(f"/api/courses/{course_id}/ask", json={"question": "在吗"})
+    assert r.status_code == 400
+    assert "删" in r.get_json()["message"] and r.get_json()["ok"] is False
+
+
+def test_responses_forbid_being_framed(tmp_path):
+    # M5:别的网页不许拿 iframe 把小灶页面套进去骗点击
+    r = make_client(tmp_path).get("/api/status")
+    assert r.headers["X-Frame-Options"] == "DENY"
