@@ -21,15 +21,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     data_dir = args.data_dir or default_data_dir()
-    data_dir.mkdir(parents=True, exist_ok=True)
 
     if args.version:
         print(f"小灶 v{__version__}")
         print(f"数据目录:{data_dir}")
         return 0
 
-    print(f"数据目录:{data_dir}")
-    print("(服务入口将在 Task 5 接通)")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    from app.server import run_server
+
+    run_server(data_dir, port=args.port, open_browser=not args.no_browser)
     return 0
 
 
