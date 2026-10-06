@@ -25,5 +25,5 @@ chmod +x dist/xiaozhao/start.command dist/xiaozhao/python/bin/python3
 
 tar -czf xiaozhao-macos-arm64.tar.gz -C dist xiaozhao
 echo "--- 确认权限位(start.command 与 python3 应为 rwxr-xr-x)---"
-tar -tvzf xiaozhao-macos-arm64.tar.gz | grep -E "start.command|bin/python3$" || true
+tar -tvzf xiaozhao-macos-arm64.tar.gz | grep -E "start\.command|bin/python3\.13$" || true
 ls -lh xiaozhao-macos-arm64.tar.gz
