@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 data/
 dist/
+build/
 xiaozhao-macos-*.tar.gz
 pbs.tar.gz
 Mac自检-输出.txt
