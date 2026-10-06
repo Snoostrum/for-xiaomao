@@ -7,11 +7,11 @@ jobs:
   build:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: 组装 + 冒烟
         run: bash scripts/build_macos.sh
       - name: 上传产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xiaozhao-macos-arm64
           path: xiaozhao-macos-arm64.tar.gz

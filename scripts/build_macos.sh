@@ -20,7 +20,7 @@ chmod +x dist/xiaozhao/start.command dist/xiaozhao/python/bin/python3
 
 # 冒烟 1:能 import;冒烟 2:服务能起来、/api/status 有回应
 (cd dist/xiaozhao \
-  && ./python/bin/python3 -c "import app, flask, requests; print('import ok')" \
+  && ./python/bin/python3 -c "import app, flask, requests, pymupdf; print('import ok')" \
   && ./python/bin/python3 -m app.main --self-test)
 
 tar -czf xiaozhao-macos-arm64.tar.gz -C dist xiaozhao

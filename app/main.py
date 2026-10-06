@@ -84,7 +84,31 @@ def _wait_forever() -> None:
         pass
 
 
+def _check_pymupdf() -> None:
+    """解析课件的库在不在、能不能真干活:内存里做份小 PDF 走一圈(不落盘)。"""
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "selftest", fontsize=12)
+    data = doc.tobytes()
+    doc.close()
+    reopened = pymupdf.open(stream=data, filetype="pdf")
+    try:
+        assert reopened[0].get_text().strip() == "selftest"
+    finally:
+        reopened.close()
+
+
 def _run_self_test(data_dir: Path) -> int:
+    # 这一段必须在 import app.server 之前:server → courseware.parse 在模块顶层就 import pymupdf,
+    # 库真缺了的话那行 import 先炸成 traceback,这里的人话就没机会说了。
+    try:
+        _check_pymupdf()
+    except Exception as e:
+        print(f"自检失败:PyMuPDF 不可用({e!r})——打包时把解析库漏了")
+        return 1
+    print("PyMuPDF 就位(解析课件没问题)")
+
     import json as _json
     import threading
     import time

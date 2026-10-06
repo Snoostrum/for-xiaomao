@@ -39,6 +39,44 @@ def test_default_data_dir_is_next_to_exe_when_frozen(monkeypatch, tmp_path):
     assert default_data_dir() == tmp_path / "data"
 
 
+def test_check_pymupdf_round_trips_a_small_pdf():
+    # 解析课件的库得真能干活:建一份、存一遍、开回来、抽字对得上(内存里走,不落盘)
+    from app.main import _check_pymupdf
+
+    _check_pymupdf()  # 不抛异常就算过
+
+
+def test_self_test_reports_pymupdf_ready(tmp_path):
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    out = subprocess.run(
+        [sys.executable, "-m", "app.main", "--self-test", "--data-dir", str(tmp_path)],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=30,
+    )
+    assert out.returncode == 0
+    assert "PyMuPDF 就位" in out.stdout
+
+
+def test_self_test_speaks_before_the_import_error_when_pymupdf_missing(tmp_path):
+    # 打包漏了 pymupdf 的样子:import 就炸。自检必须抢在那之前说人话,
+    # 而不是甩一段 ImportError traceback 给朋友看。
+    # 做法:在 PYTHONPATH 前面塞一个同名模块,import 时直接抛 ImportError。
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    (shadow / "pymupdf.py").write_text('raise ImportError("模拟:打包时把 PyMuPDF 漏了")\n', encoding="utf-8")
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONPATH": str(shadow) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
+    out = subprocess.run(
+        [sys.executable, "-m", "app.main", "--self-test", "--data-dir", str(tmp_path)],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=30,
+    )
+    assert out.returncode == 1
+    assert "自检失败:PyMuPDF 不可用" in out.stdout
+    assert "Traceback" not in out.stdout + out.stderr  # 朋友不该看到 py 的栈
+
+
 def test_setup_console_does_not_crash():
     from app.main import _setup_console
 
