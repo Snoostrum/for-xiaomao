@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+dist/
+xiaozhao-macos-*.tar.gz
+pbs.tar.gz
+Mac自检-输出.txt
