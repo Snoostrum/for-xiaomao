@@ -1598,9 +1598,6 @@ import time
 
 import pymupdf
 
-from app.config import Config, load_config, save_config  # Task 1 已加过就跳过这行
-from tests.test_provider import FakeLLM, cfg_for
-
 
 def make_pdf_bytes(text="第一页内容") -> bytes:
     doc = pymupdf.open()
@@ -1997,7 +1994,7 @@ git commit -m "feat: 课件接口与课件页——上传/列表/后台解析进
 
 - [ ] **Step 1: 写失败测试**
 
-`tests/test_server.py` — 追加:
+`tests/test_server.py` — 顶部 import 区补一行 `from tests.test_provider import FakeLLM, cfg_for`(`save_config`、`time` 前面任务已加),然后追加:
 
 ```python
 def test_ask_end_to_end(tmp_path):
