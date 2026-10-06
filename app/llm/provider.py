@@ -31,6 +31,8 @@ def _post_chat(cfg: Config, payload: dict, timeout: float) -> dict:
         raise LLMError("安全连接没建起来(SSL 错误)——检查『接口地址』填对了没有。", f"{e} | {url}")
     except requests.exceptions.ConnectionError as e:
         raise LLMError(f"连不上 {url} ——检查网络,或确认『接口地址』填对了。", f"{e} | {url}")
+    except requests.exceptions.RequestException as e:
+        raise LLMError(f"连不上 {url} ——检查网络;或确认『接口地址』填对了(要以 http:// 或 https:// 开头)。", f"{e} | {url}")
 
     if resp.status_code == 401:
         raise LLMError("Key 不对或已过期——去平台重新复制一个,粘贴到上面。", resp.text[:300])

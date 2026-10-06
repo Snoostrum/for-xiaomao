@@ -93,3 +93,9 @@ def test_chat_completion_returns_text():
 def test_missing_key_says_so():
     ok, msg = test_connection(Config())
     assert ok is False and "Key" in msg
+
+
+def test_base_url_without_scheme_gets_human_message():
+    cfg = Config(provider="custom", base_url="example.com/v1", api_key="k", model="m")
+    ok, msg = test_connection(cfg)
+    assert ok is False and "连不上" in msg and "http" in msg
