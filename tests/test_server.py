@@ -119,3 +119,11 @@ def test_vision_model_roundtrip(tmp_path):
     c.post("/api/config", json={"provider": "custom", "base_url": "https://x/v1", "model": "m", "vision_model": " vm "})
     assert load_config(tmp_path).vision_model == "vm"
     assert c.get("/api/config").get_json()["vision_model"] == "vm"
+
+
+def test_usage_endpoint_reports_totals(tmp_path):
+    from app.usage import record_usage
+
+    record_usage(tmp_path, "提问", "m", {"prompt_tokens": 5, "completion_tokens": 5})
+    data = make_client(tmp_path).get("/api/usage").get_json()
+    assert data["calls"] == 1 and data["prompt_tokens"] == 5

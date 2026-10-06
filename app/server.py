@@ -16,6 +16,7 @@ from app.config import load_config, mask_key, save_config
 from app.llm.presets import PRESETS
 from app.llm.provider import test_connection
 from app.logging_setup import setup_logging
+from app.usage import usage_totals
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +113,10 @@ def create_app(data_dir: Path) -> Flask:
             cfg.model = preset.default_model
         save_config(data_dir, cfg)
         return jsonify({"ok": True, "api_key_masked": mask_key(cfg.api_key)})
+
+    @app.get("/api/usage")
+    def api_usage():
+        return jsonify(usage_totals(data_dir))
 
     @app.post("/api/test-connection")
     def api_test_connection():
