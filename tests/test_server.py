@@ -5,6 +5,7 @@ import threading
 import time
 
 import pymupdf
+import pytest
 
 from app.config import Config, load_config, save_config
 from app.logging_setup import setup_logging
@@ -263,3 +264,106 @@ def test_double_click_parse_starts_only_one_run(tmp_path, monkeypatch):
     time.sleep(0.3)  # 没锁的话,第二个解析会在这一小段里冒头
     holding.set()
     assert started == [course_id]  # 两个请求同时到,只准跑一遍
+
+
+# —— fix round 1:T10 评审 M1(抢占成功后的意外不许把 running 粘住)与 M2(解析/删除交错)——
+
+
+def test_parse_start_failure_does_not_leave_a_stuck_running_job(tmp_path, monkeypatch):
+    # M1:占位成功但线程起不来(比如系统开不出新线程)→「解析中…」必须撤掉,
+    # 不然这份课件永远删不掉、也永远解析不了,只能重启小灶。
+    import app.server as server_mod
+
+    c = make_client(tmp_path)
+    course_id = upload(c).get_json()["id"]
+
+    class NoThread:
+        @staticmethod
+        def Thread(*_a, **_k):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(server_mod, "threading", NoThread)
+    with pytest.raises(RuntimeError):
+        c.post(f"/api/courses/{course_id}/parse")
+
+    monkeypatch.undo()
+    item = c.get("/api/courses").get_json()[0]
+    assert "job" not in item  # 没粘着「解析中…」
+    assert c.delete(f"/api/courses/{course_id}").status_code == 200  # 也没被它卡住
+
+
+def test_parse_config_failure_happens_before_the_job_is_claimed(tmp_path, monkeypatch):
+    # M1 的另一半:读配置会抛的先抛——先占下 job 再炸,坏配置就把课件粘在「解析中…」了
+    import app.server as server_mod
+
+    c = make_client(tmp_path)
+    course_id = upload(c).get_json()["id"]
+
+    def broken_load_config(_data_dir):
+        raise OSError("config.json 被别的程序占着")
+
+    monkeypatch.setattr(server_mod, "load_config", broken_load_config)
+    with pytest.raises(OSError):
+        c.post(f"/api/courses/{course_id}/parse")
+
+    monkeypatch.undo()
+    assert "job" not in c.get("/api/courses").get_json()[0]
+
+
+def test_parse_racing_a_delete_leaves_no_stale_job_card(tmp_path, monkeypatch):
+    # M2:解析刚校验完「文件还在」、还没抢占时,删除先落地 →
+    # 解析必须老实报「不在了」并且一个 job 都不许占;否则会留下一张指向已删 id 的
+    # 失败卡片,同内容重传(同 id)时那张卡片会盖住真实状态。
+    import app.server as server_mod
+    from app.courseware import course_file as real_course_file
+
+    app = create_app(tmp_path)
+    app.config["TESTING"] = True
+    parse_client, other = app.test_client(), app.test_client()
+    payload = make_pdf_bytes()
+    course_id = upload(parse_client, "讲义.pdf", payload).get_json()["id"]
+
+    checked = threading.Event()
+    released = threading.Event()
+
+    class PathCheckedThenDeleted:
+        """把「校验的那一刻」定住:第 1 次 exists() 里等删除落地,再说"还在"
+        (真实交错里,校验就是在文件还在的时候通过的);第 2 次起照实说。"""
+
+        def __init__(self, real):
+            self._real = real
+            self._calls = 0
+
+        def exists(self):
+            self._calls += 1
+            if self._calls == 1:
+                checked.set()
+                released.wait(10)  # 删除在这段时间里跑完
+                return True
+            return self._real.exists()
+
+    def pausing_course_file(data_dir, cid):
+        return PathCheckedThenDeleted(real_course_file(data_dir, cid))
+
+    monkeypatch.setattr(server_mod, "course_file", pausing_course_file)
+
+    response = {}
+
+    def post_parse():
+        response["r"] = parse_client.post(f"/api/courses/{course_id}/parse")
+
+    t = threading.Thread(target=post_parse)
+    t.start()
+    assert checked.wait(10)
+    assert other.delete(f"/api/courses/{course_id}").status_code == 200
+    released.set()
+    t.join(15)
+
+    r = response["r"]
+    assert r.status_code == 400 and "不在了" in r.get_json()["message"]
+
+    again = upload(other, "讲义.pdf", payload).get_json()  # 同内容重传:还是那个 id
+    assert again["id"] == course_id and again["is_new"] is True
+    item = other.get("/api/courses").get_json()[0]
+    assert "job" not in item  # 上次没留下失败卡片
+    assert item["status"]["state"] == "none"

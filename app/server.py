@@ -50,13 +50,21 @@ def create_app(data_dir: Path) -> Flask:
     jobs: dict[str, dict] = {}  # 解析任务的内存状态;进程重启就没了,页面只当"没在跑"
     jobs_lock = threading.Lock()  # 抢占解析任务用:双击/双标签同时点也只跑一遍
 
-    def _claim_parse_job(course_id: str) -> dict | None:
-        """原子抢占解析任务:已经有人在跑就把它返回来(调用方直接回"别开第二个");没人跑就占下。
+    def _claim_parse_job(course_id: str, src: Path) -> dict | None:
+        """原子抢占解析任务,顺手把"课件还在不在"也一起看了。
+
+        - 文件不在了 → 抛 CoursewareError(调用方翻成 400 人话):删除刚把原件删掉时走这里;
+        - 已经有人在跑 → 返回它的状态(调用方直接回"别开第二个");
+        - 没人跑 → 占下 running 并返回 None。
 
         检查和登记必须同一把锁里做完——分成两步,两个同时到的请求会双双通过检查、
         把同一份课件解析两遍(同一页问两遍模型重复花钱,meta.json.tmp 也会互踩)。
+        删除也走这把锁,所以「文件还在」这个判断在锁里做才作数:校验在锁外做的话,
+        删除可以卡在校验与抢占之间落地,线程起来只会对着已删的文件失败,留下假卡片。
         """
         with jobs_lock:
+            if not src.exists():
+                raise CoursewareError("这份课件不在了——刷新页面看看。")
             running = jobs.get(course_id)
             if running and running.get("state") == "running":
                 return dict(running)
@@ -176,14 +184,14 @@ def create_app(data_dir: Path) -> Flask:
     def api_parse_course(course_id: str):
         try:
             src = course_file(data_dir, course_id)
+            cfg = load_config(data_dir)  # 会抛的先抛(比如 config.json 读不动):别先占下 job 再炸出幽灵 running
+            if not src.exists():  # 便宜的早退;真正作数的是抢占那一步在锁里再看的一眼(见 _claim_parse_job)
+                raise CoursewareError("这份课件不在了——刷新页面看看。")
+            running = _claim_parse_job(course_id, src)
         except CoursewareError as e:
             return jsonify({"ok": False, "message": e.human}), 400
-        if not src.exists():
-            return jsonify({"ok": False, "message": "这份课件不在了——刷新页面看看。"}), 400
-        running = _claim_parse_job(course_id)
         if running is not None:
             return jsonify({"ok": True, "job": running})  # 已在跑,别开第二个
-        cfg = load_config(data_dir)
 
         def report(done: int, total: int) -> None:
             jobs[course_id] = {"state": "running", "done": done, "total": total}
@@ -199,18 +207,24 @@ def create_app(data_dir: Path) -> Flask:
                 log.exception("解析课件 %s 出了意外", course_id)
                 jobs[course_id] = {"state": "failed", "message": "解析出了点意外——细节在日志里;再点一次「解析」多半能续上。"}
 
-        threading.Thread(target=run, daemon=True).start()
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except Exception:  # 线程起不来这类意外:把占位撤掉,别让这份课件永远停在「解析中…」
+            jobs.pop(course_id, None)
+            raise
         return jsonify({"ok": True, "job": dict(jobs[course_id])})
 
     @app.delete("/api/courses/<course_id>")
     def api_delete_course(course_id: str):
-        if jobs.get(course_id, {}).get("state") == "running":
-            return jsonify({"ok": False, "message": "这份正在解析——等它跑完(或退出重开小灶)再删。"}), 400
         try:
-            delete_course(data_dir, course_id)
+            # 查在跑、删原件、清 job 一把锁里做完:解析的「校验+抢占」也走这把锁,两边不会交错
+            with jobs_lock:
+                if jobs.get(course_id, {}).get("state") == "running":
+                    return jsonify({"ok": False, "message": "这份正在解析——等它跑完(或退出重开小灶)再删。"}), 400
+                delete_course(data_dir, course_id)
+                jobs.pop(course_id, None)
         except CoursewareError as e:
             return jsonify({"ok": False, "message": e.human}), 400
-        jobs.pop(course_id, None)
         return jsonify({"ok": True})
 
     @app.errorhandler(413)
