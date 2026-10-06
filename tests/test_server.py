@@ -10,6 +10,7 @@ import pytest
 from app.config import Config, load_config, save_config
 from app.logging_setup import setup_logging
 from app.server import create_app, find_free_port
+from tests.test_provider import FakeLLM, cfg_for
 
 
 def make_client(tmp_path):
@@ -367,3 +368,35 @@ def test_parse_racing_a_delete_leaves_no_stale_job_card(tmp_path, monkeypatch):
     item = other.get("/api/courses").get_json()[0]
     assert "job" not in item  # 上次没留下失败卡片
     assert item["status"]["state"] == "none"
+
+
+# —— Task 11:提问接口 ——
+
+
+def test_ask_end_to_end(tmp_path):
+    # 一份文字版课件:上传 → 解析(本地活,不花钱)→ 提问(走 FakeLLM)
+    with FakeLLM() as fake:  # 默认回答「收到」
+        save_config(tmp_path, cfg_for(fake))
+        c = make_client(tmp_path)
+        course_id = upload(c).get_json()["id"]
+        c.post(f"/api/courses/{course_id}/parse")
+        for _ in range(100):
+            if c.get("/api/courses").get_json()[0]["status"]["state"] == "done":
+                break
+            time.sleep(0.05)
+        r = c.post(f"/api/courses/{course_id}/ask", json={"question": "这页讲了啥?"})
+        assert r.status_code == 200
+        assert r.get_json()["answer"] == "收到"
+        assert c.get("/api/usage").get_json()["calls"] == 1
+
+
+def test_ask_unparsed_course_is_human(tmp_path):
+    c = make_client(tmp_path)
+    course_id = upload(c).get_json()["id"]
+    r = c.post(f"/api/courses/{course_id}/ask", json={"question": "在吗"})
+    assert r.status_code == 400 and "解析" in r.get_json()["message"]
+
+
+def test_ask_non_object_body_is_400(tmp_path):
+    r = make_client(tmp_path).post("/api/courses/zzz/ask", json=[1, 2])
+    assert r.status_code == 400 and r.get_json()["ok"] is False

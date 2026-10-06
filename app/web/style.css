@@ -44,3 +44,6 @@ button { font-size: 15px; padding: 10px 20px; border-radius: 8px; cursor: pointe
 .course-meta { color: #777; font-size: 13px; }
 .course-actions { display: flex; gap: 6px; }
 #upload-result { white-space: pre-wrap; }
+#ask-title { font-size: 16px; margin: 20px 0 0; }
+#ask-result { white-space: pre-wrap; margin-top: 10px; }
+#usage-line { margin-top: 16px; font-size: 13px; color: #777; }

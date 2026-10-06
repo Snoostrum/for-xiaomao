@@ -15,6 +15,7 @@ from app import __version__
 from app.config import load_config, mask_key, save_config
 from app.courseware import CoursewareError, course_file
 from app.courseware.parse import course_status, parse_course
+from app.courseware.qa import ask_course
 from app.courseware.store import delete_course, list_courses, save_upload
 from app.errors import HumanError
 from app.llm.presets import PRESETS
@@ -226,6 +227,16 @@ def create_app(data_dir: Path) -> Flask:
         except CoursewareError as e:
             return jsonify({"ok": False, "message": e.human}), 400
         return jsonify({"ok": True})
+
+    @app.post("/api/courses/<course_id>/ask")
+    def api_ask_course(course_id: str):
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "message": "请求格式不对——用页面上的输入框问。"}), 400
+        cfg = load_config(data_dir)
+        # 出错(没解析、太长、Key 不对……)会抛 HumanError,由统一 errorhandler 翻成 400 人话
+        answer = ask_course(data_dir, course_id, str(body.get("question") or ""), cfg)
+        return jsonify({"ok": True, "answer": answer})
 
     @app.errorhandler(413)
     def payload_too_large(_e):

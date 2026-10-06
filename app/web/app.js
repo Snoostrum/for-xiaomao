@@ -192,6 +192,9 @@ async function refreshCourses() {
     if (!(c.job && c.job.state === "running")) {
       act.append(makeBtn("解析", () => runParse(c.id)));
     }
+    if (c.status && c.status.state === "done") {
+      act.append(makeBtn("提问", () => openAsk(c)));
+    }
     act.append(makeBtn("删除", () => removeCourse(c)));
     li.append(name, meta, act);
     courseList.append(li);
@@ -216,6 +219,10 @@ async function runParse(courseId) {
 async function removeCourse(c) {
   try {
     await api(`/api/courses/${c.id}`, { method: "DELETE" });
+    if (currentCourse && currentCourse.id === c.id) {
+      currentCourse = null;
+      askArea.hidden = true;
+    }
     show("upload-result", `已删:${c.name}`, true);
     refreshCourses();
   } catch (e) {
@@ -249,3 +256,67 @@ btnUpload.addEventListener("click", async () => {
 });
 
 refreshCourses();
+
+// ---------- 提问 ----------
+const askArea = document.getElementById("ask-area");
+const askTitle = document.getElementById("ask-title");
+const askInput = document.getElementById("ask-input");
+const askResult = document.getElementById("ask-result");
+const btnAsk = document.getElementById("btn-ask");
+let asking = false;
+let currentCourse = null;
+
+function openAsk(course) {
+  currentCourse = course;
+  askTitle.textContent = "问这份课件:" + course.name;
+  askArea.hidden = false;
+  askResult.textContent = "";
+  askInput.focus();
+}
+
+async function askCurrent() {
+  if (asking || !currentCourse) return;
+  const question = askInput.value.trim();
+  if (!question) {
+    askResult.className = "err";
+    askResult.textContent = "问题还没写呢。";
+    return;
+  }
+  asking = true;
+  btnAsk.disabled = true;
+  askResult.className = "ok";
+  askResult.textContent = "正在翻课件想…(课件长的话要等一会儿)";
+  try {
+    const r = await api(`/api/courses/${currentCourse.id}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    askResult.className = "ok";
+    askResult.textContent = r.answer;
+    askInput.value = "";
+    loadUsage();
+  } catch (e) {
+    askResult.className = "err";
+    askResult.textContent = e.message;
+  }
+  asking = false;
+  btnAsk.disabled = false;
+}
+
+btnAsk.addEventListener("click", askCurrent);
+askInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") askCurrent();
+});
+
+async function loadUsage() {
+  try {
+    const u = await api("/api/usage");
+    document.getElementById("usage-line").textContent =
+      `模型调用累计:${u.calls} 次 · 输入 ${u.prompt_tokens} / 输出 ${u.completion_tokens} tokens(本机记录,仅供参考)`;
+  } catch {
+    // 用量显示不重要,拉不到就算了
+  }
+}
+
+document.querySelector('button[data-tab="settings"]').addEventListener("click", loadUsage);

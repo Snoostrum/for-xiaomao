@@ -23,6 +23,14 @@
     </div>
     <p id="upload-result"></p>
     <ul id="course-list" class="course-list"></ul>
+    <div id="ask-area" hidden>
+      <h3 id="ask-title"></h3>
+      <div class="row">
+        <input id="ask-input" placeholder="比如:第 3 页讲的是什么?">
+        <button id="btn-ask">提问</button>
+      </div>
+      <div id="ask-result"></div>
+    </div>
     <p class="hint">放进来 → 点「解析」→ 解析就是把课件拆成一页一页存在本机;解析过的页不会重复解析。</p>
   </section>
   <section class="panel" id="panel-download">
@@ -50,6 +58,7 @@
     </div>
     <p id="save-result"></p>
     <p id="test-result"></p>
+    <p id="usage-line" class="hint"></p>
   </section>
 </main>
 <script type="module" src="/static/app.js"></script>
